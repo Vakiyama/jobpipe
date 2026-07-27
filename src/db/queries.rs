@@ -7,9 +7,19 @@ use sea_orm::{
     QuerySelect, Set,
 };
 
-use super::entities::prelude::{Company, Posting};
-use super::entities::{company, posting};
+use super::entities::prelude::{Application, Company, Posting};
+use super::entities::{application, company, posting};
 use crate::normalize::NormalizedPosting;
+
+/// The canonical application stages, in order. `stage` validates against this.
+pub const STAGES: [&str; 6] = [
+    "applied",
+    "screen",
+    "interview",
+    "offer",
+    "rejected",
+    "ghosted",
+];
 
 /// A company to seed from `companies.toml`.
 pub struct SeedCompany {
@@ -275,4 +285,114 @@ pub async fn open_postings(
         .find_also_related(Company)
         .all(db)
         .await?)
+}
+
+/// A posting paired with its company, by posting id.
+pub async fn posting_with_company(
+    db: &DatabaseConnection,
+    posting_id: i32,
+) -> Result<Option<(posting::Model, Option<company::Model>)>> {
+    let Some(p) = Posting::find_by_id(posting_id).one(db).await? else {
+        return Ok(None);
+    };
+    let company = Company::find_by_id(p.company_id).one(db).await?;
+    Ok(Some((p, company)))
+}
+
+/// Outcome of recording an application.
+pub enum ApplyOutcome {
+    Created(application::Model),
+    Existing(application::Model),
+}
+
+/// Record an application against a posting. If one already exists for the
+/// posting, returns it unchanged rather than duplicating (a role is applied to
+/// once). The caller is expected to have validated the posting exists.
+pub async fn create_application(
+    db: &DatabaseConnection,
+    posting_id: i32,
+    now: &str,
+) -> Result<ApplyOutcome> {
+    if let Some(existing) = Application::find()
+        .filter(application::Column::PostingId.eq(posting_id))
+        .one(db)
+        .await?
+    {
+        return Ok(ApplyOutcome::Existing(existing));
+    }
+    let model = application::ActiveModel {
+        posting_id: Set(posting_id),
+        applied_at: Set(now.to_string()),
+        stage: Set("applied".to_string()),
+        last_contact: Set(None),
+        next_followup: Set(None),
+        notes: Set(None),
+        ..Default::default()
+    }
+    .insert(db)
+    .await?;
+    Ok(ApplyOutcome::Created(model))
+}
+
+/// An application joined to its posting and company for display.
+pub type AppRow = (
+    application::Model,
+    Option<posting::Model>,
+    Option<company::Model>,
+);
+
+/// List applications, newest first. With `stage`, filters to exactly that stage;
+/// without it, returns only open applications (excludes rejected/ghosted).
+pub async fn list_applications(
+    db: &DatabaseConnection,
+    stage: Option<&str>,
+) -> Result<Vec<AppRow>> {
+    let mut q = Application::find();
+    q = match stage {
+        Some(s) => q.filter(application::Column::Stage.eq(s)),
+        None => q.filter(application::Column::Stage.is_not_in(["rejected", "ghosted"])),
+    };
+    let apps = q
+        .order_by_desc(application::Column::AppliedAt)
+        .all(db)
+        .await?;
+
+    let mut rows = Vec::with_capacity(apps.len());
+    for a in apps {
+        let posting = Posting::find_by_id(a.posting_id).one(db).await?;
+        let company = match &posting {
+            Some(p) => Company::find_by_id(p.company_id).one(db).await?,
+            None => None,
+        };
+        rows.push((a, posting, company));
+    }
+    Ok(rows)
+}
+
+/// Move an application to a new stage, stamping `last_contact = now` (a logged
+/// transition is a contact event, which resets the follow-up clocks) and
+/// appending a dated note when one is given. Returns false if no such id.
+pub async fn update_application_stage(
+    db: &DatabaseConnection,
+    app_id: i32,
+    stage: &str,
+    note: Option<&str>,
+    now: &str,
+    today: &str,
+) -> Result<bool> {
+    let Some(model) = Application::find_by_id(app_id).one(db).await? else {
+        return Ok(false);
+    };
+    let mut am: application::ActiveModel = model.clone().into();
+    am.stage = Set(stage.to_string());
+    am.last_contact = Set(Some(now.to_string()));
+    if let Some(n) = note {
+        let appended = match model.notes {
+            Some(prev) if !prev.is_empty() => format!("{prev}\n[{today}] {n}"),
+            _ => format!("[{today}] {n}"),
+        };
+        am.notes = Set(Some(appended));
+    }
+    am.update(db).await?;
+    Ok(true)
 }

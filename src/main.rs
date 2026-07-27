@@ -52,12 +52,197 @@ async fn main() -> Result<()> {
             dry_run,
             profile,
         } => cmd_triage(&cli.db, limit, dry_run, &profile).await,
+        Command::Apply { posting_id } => cmd_apply(&cli.db, posting_id).await,
+        Command::Track { stage } => cmd_track(&cli.db, stage.as_deref()).await,
+        Command::Stage {
+            application_id,
+            stage,
+            note,
+        } => cmd_stage(&cli.db, application_id, &stage, note.as_deref()).await,
+        Command::Followup => cmd_followup(&cli.db).await,
         Command::Digest {
             min_score,
             since,
             format,
         } => cmd_digest(&cli.db, min_score, since.as_deref(), format).await,
     }
+}
+
+/// Best-effort open of a URL in the user's browser. Never fails the command —
+/// headless environments simply won't have an opener.
+fn open_url(url: &str) {
+    let (cmd, args): (&str, Vec<&str>) = if cfg!(target_os = "macos") {
+        ("open", vec![url])
+    } else if cfg!(target_os = "windows") {
+        ("cmd", vec!["/C", "start", "", url])
+    } else {
+        ("xdg-open", vec![url])
+    };
+    let _ = std::process::Command::new(cmd)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+fn company_name(c: &Option<db::entities::company::Model>) -> &str {
+    c.as_ref().map(|c| c.name.as_str()).unwrap_or("(unknown)")
+}
+
+/// Whole days elapsed from an RFC3339 timestamp to now.
+fn days_since(ts: &str, now: chrono::DateTime<Utc>) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|t| (now - t.with_timezone(&Utc)).num_days())
+}
+
+async fn cmd_apply(db_path: &str, posting_id: i32) -> Result<()> {
+    let conn = db::connect(db_path).await?;
+    let Some((posting, company)) = queries::posting_with_company(&conn, posting_id).await? else {
+        anyhow::bail!("no posting with id {posting_id} — check `jobpipe digest`");
+    };
+    let now = Utc::now().to_rfc3339();
+    match queries::create_application(&conn, posting_id, &now).await? {
+        queries::ApplyOutcome::Existing(a) => {
+            println!(
+                "Already applied to \"{}\" — {} (application #{}, stage {}).",
+                posting.title,
+                company_name(&company),
+                a.id,
+                a.stage
+            );
+        }
+        queries::ApplyOutcome::Created(a) => {
+            println!(
+                "Recorded application #{}: \"{}\" — {}.",
+                a.id,
+                posting.title,
+                company_name(&company)
+            );
+            open_url(&posting.apply_url);
+            println!("Apply: {}", posting.apply_url);
+        }
+    }
+    Ok(())
+}
+
+fn applied_date(ts: &str) -> &str {
+    ts.split('T').next().unwrap_or(ts)
+}
+
+async fn cmd_track(db_path: &str, stage: Option<&str>) -> Result<()> {
+    if let Some(s) = stage {
+        if !queries::STAGES.contains(&s) {
+            anyhow::bail!(
+                "invalid stage '{s}' — expected one of {:?}",
+                queries::STAGES
+            );
+        }
+    }
+    let conn = db::connect(db_path).await?;
+    let rows = queries::list_applications(&conn, stage).await?;
+    if rows.is_empty() {
+        println!(
+            "No {}applications.",
+            stage.map(|s| format!("{s} ")).unwrap_or_default()
+        );
+        return Ok(());
+    }
+    for (a, posting, company) in &rows {
+        let title = posting
+            .as_ref()
+            .map(|p| p.title.as_str())
+            .unwrap_or("(posting gone)");
+        println!(
+            "#{:<4} {:<9} {}  —  {}  (applied {})",
+            a.id,
+            a.stage,
+            title,
+            company_name(company),
+            applied_date(&a.applied_at)
+        );
+    }
+    println!("\n{} open application(s).", rows.len());
+    Ok(())
+}
+
+async fn cmd_stage(
+    db_path: &str,
+    application_id: i32,
+    stage: &str,
+    note: Option<&str>,
+) -> Result<()> {
+    if !queries::STAGES.contains(&stage) {
+        anyhow::bail!(
+            "invalid stage '{stage}' — expected one of {:?}",
+            queries::STAGES
+        );
+    }
+    let conn = db::connect(db_path).await?;
+    let now = Utc::now();
+    let updated = queries::update_application_stage(
+        &conn,
+        application_id,
+        stage,
+        note,
+        &now.to_rfc3339(),
+        &now.format("%Y-%m-%d").to_string(),
+    )
+    .await?;
+    if updated {
+        println!("Application #{application_id} → {stage}.");
+    } else {
+        anyhow::bail!("no application with id {application_id} — check `jobpipe track`");
+    }
+    Ok(())
+}
+
+async fn cmd_followup(db_path: &str) -> Result<()> {
+    let conn = db::connect(db_path).await?;
+    let rows = queries::list_applications(&conn, None).await?;
+    let now = Utc::now();
+    let mut due = 0;
+    for (a, posting, company) in &rows {
+        let title = posting
+            .as_ref()
+            .map(|p| p.title.as_str())
+            .unwrap_or("(posting gone)");
+        let label = format!("#{} {} — {}", a.id, title, company_name(company));
+        let suggestion = match a.stage.as_str() {
+            // No contact since applying: nudge, then suggest giving up.
+            "applied" if a.last_contact.is_none() => match days_since(&a.applied_at, now) {
+                Some(d) if d >= 21 => Some(format!(
+                    "{d}d since applied, no response — consider marking ghosted"
+                )),
+                Some(d) if d >= 7 => Some(format!(
+                    "{d}d since applied, no response — send a follow-up email"
+                )),
+                _ => None,
+            },
+            // In an interview loop: check in if it's gone quiet.
+            "screen" | "interview" => {
+                let reference = a.last_contact.as_deref().unwrap_or(&a.applied_at);
+                match days_since(reference, now) {
+                    Some(d) if d >= 5 => Some(format!(
+                        "{d}d since last contact in {} — send a check-in",
+                        a.stage
+                    )),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some(s) = suggestion {
+            println!("{label}\n    → {s}");
+            due += 1;
+        }
+    }
+    if due == 0 {
+        println!("No follow-ups due.");
+    } else {
+        println!("\n{due} follow-up(s) due.");
+    }
+    Ok(())
 }
 
 async fn cmd_init(db_path: &str, companies_path: &str) -> Result<()> {

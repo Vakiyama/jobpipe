@@ -53,6 +53,33 @@ pub enum Command {
         profile: String,
     },
 
+    /// Record an application against a posting and open its apply URL.
+    Apply {
+        /// The posting id (from the digest).
+        posting_id: i32,
+    },
+
+    /// List open applications, optionally filtered to one stage.
+    Track {
+        /// Show only this stage (applied | screen | interview | offer | rejected | ghosted).
+        #[arg(long)]
+        stage: Option<String>,
+    },
+
+    /// Move an application to a new stage.
+    Stage {
+        /// The application id (from `track`).
+        application_id: i32,
+        /// The new stage.
+        stage: String,
+        /// A note to append to the application, dated.
+        #[arg(long)]
+        note: Option<String>,
+    },
+
+    /// List applications that are due for a nudge.
+    Followup,
+
     /// Print the digest of open postings.
     Digest {
         /// Only show postings scored at or above this threshold.
