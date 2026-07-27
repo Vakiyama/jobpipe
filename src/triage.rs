@@ -297,16 +297,32 @@ for fit and output JSON only — no prose, no markdown fences.
 Return a JSON array with one object per posting, in this exact shape:
 [{{"external_id": "...", "score": 0, "reason": "one sentence, max 20 words", "flags": ["rust", "no_canada", "contract"]}}]
 
-Scoring rubric (0-10):
+HARD LOCATION GATE — apply this FIRST, before the rubric. The candidate's work
+authorization is Canada only. A posting's location is WORKABLE only if it offers at
+least one of:
+  - Vancouver / Greater Vancouver (onsite or hybrid), or
+  - Canada remote ("Remote - Canada", remote within Canada), or
+  - Remote that explicitly includes Canada (e.g. "US & Canada remote", "Remote - Americas"
+    where Canada is named).
+A location is NOT workable if the only options are: US-only (onsite anywhere in the US, or
+US-only remote that does not name Canada), onsite anywhere outside Greater Vancouver, or any
+non-Canada country — even when the role is otherwise remote. A US-remote posting that does
+not explicitly allow Canada is NOT workable.
+If a posting lists several locations and ANY one is workable, treat it as workable and score
+normally. If NONE is workable, you MUST cap the score at 3 and add the "no_canada" flag — no
+matter how strong the stack, seniority, or role fit is. Only when the location is genuinely
+unstated should you skip the cap and score on the other axes.
+
+Scoring rubric (0-10), applied only after a posting passes the location gate:
 - 9-10: Rust role at or near this experience level, or a backend/full-stack role that explicitly
   mentions Rust in the stack. The candidate has PRODUCTION Rust (a shipped, in-use system), not
   just side projects — do not down-rank Rust roles for lack of commercial experience.
-- 7-8: Strong TS/React/Node full-stack or frontend role in the 2-5 YOE band with a workable
-  location; or an AI/LLM application-engineering role (agent orchestration, tool use, LLM API
-  integration), which is a genuine second specialty here.
-- 4-6: Plausible but mismatched on one axis (slightly senior, adjacent stack, unclear location).
+- 7-8: Strong TS/React/Node full-stack or frontend role in the 2-5 YOE band; or an AI/LLM
+  application-engineering role (agent orchestration, tool use, LLM API integration), which is a
+  genuine second specialty here. (Location is already confirmed workable by the gate.)
+- 4-6: Plausible but mismatched on one axis (slightly senior, adjacent stack).
 - 0-3: Wrong discipline, wrong seniority by 5+ years, requires clearance/citizenship the candidate
-  doesn't have, or location is not workable.
+  doesn't have, or location failed the gate above.
 
 Useful flags (include any that apply, free-form): requires_citizenship, senior_only, rust,
 no_canada, contract, remote, ai_llm.
