@@ -3,6 +3,8 @@
 
 use crate::sources::RawPosting;
 
+// `clean_html` decodes entities via the html-escape crate.
+
 /// A posting after edge normalization, ready to upsert.
 #[derive(Debug, Clone)]
 pub struct NormalizedPosting {
@@ -20,13 +22,18 @@ pub fn normalize(raw: RawPosting) -> NormalizedPosting {
         .location
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty());
-    let remote = infer_remote(location.as_deref());
+    // Trust the source's explicit remote flag when it gave one; otherwise infer
+    // from the location string.
+    let remote = raw
+        .remote
+        .filter(|r| !r.is_empty())
+        .unwrap_or_else(|| infer_remote(location.as_deref()));
     NormalizedPosting {
         external_id: raw.external_id,
         title: raw.title.trim().to_string(),
         location,
         remote,
-        description: strip_html(&raw.description),
+        description: clean_html(&raw.description),
         apply_url: raw.apply_url,
     }
 }
@@ -49,12 +56,15 @@ fn infer_remote(location: Option<&str>) -> String {
     }
 }
 
-/// Strip HTML tags and collapse whitespace, yielding readable plain text.
-/// Entities are assumed already decoded by the source.
-fn strip_html(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
+/// Decode HTML entities, strip tags, and collapse whitespace into readable
+/// plain text. Entities are decoded first so entity-escaped markup (Greenhouse
+/// serves `&lt;p&gt;`) and real markup (the other boards) both reduce to tags
+/// that the stripper then removes.
+fn clean_html(input: &str) -> String {
+    let decoded = html_escape::decode_html_entities(input);
+    let mut out = String::with_capacity(decoded.len());
     let mut in_tag = false;
-    for ch in input.chars() {
+    for ch in decoded.chars() {
         match ch {
             '<' => in_tag = true,
             '>' => {

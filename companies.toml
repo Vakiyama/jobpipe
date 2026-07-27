@@ -1,73 +1,293 @@
-# Phase 1 seed: 10 hand-picked Greenhouse boards, weighted toward Rust-heavy
-# shops and full-stack employers that fit the candidate profile.
-# Each board is public and fetched by slug: boards-api.greenhouse.io/v1/boards/<slug>/jobs
+# Seed company list, verified live across five ATSes. Weighted toward Rust,
+# AI/LLM, and infra companies that fit the candidate profile. Grow it with
+# `jobpipe companies add <careers-url>`; prune with `companies list --needs-review`.
 
+# ---- Greenhouse ----
 [[companies]]
 name = "GitLab"
 ats = "greenhouse"
 slug = "gitlab"
-careers_url = "https://about.gitlab.com/jobs/"
 tags = "remote, rust, backend"
-
 [[companies]]
 name = "Cloudflare"
 ats = "greenhouse"
 slug = "cloudflare"
-careers_url = "https://www.cloudflare.com/careers/"
 tags = "rust, infra, backend"
-
 [[companies]]
 name = "Discord"
 ats = "greenhouse"
 slug = "discord"
-careers_url = "https://discord.com/careers"
 tags = "rust, realtime, backend"
-
 [[companies]]
 name = "Anthropic"
 ats = "greenhouse"
 slug = "anthropic"
-careers_url = "https://www.anthropic.com/careers"
 tags = "ai, llm, backend"
-
 [[companies]]
 name = "Databricks"
 ats = "greenhouse"
 slug = "databricks"
-careers_url = "https://www.databricks.com/company/careers"
-tags = "data, backend, rust"
-
+tags = "data, rust, backend"
 [[companies]]
 name = "Stripe"
 ats = "greenhouse"
 slug = "stripe"
-careers_url = "https://stripe.com/jobs"
-tags = "fullstack, backend, fintech"
-
+tags = "fintech, fullstack, backend"
 [[companies]]
 name = "Figma"
 ats = "greenhouse"
 slug = "figma"
-careers_url = "https://www.figma.com/careers/"
 tags = "fullstack, frontend, realtime"
-
 [[companies]]
 name = "Samsara"
 ats = "greenhouse"
 slug = "samsara"
-careers_url = "https://www.samsara.com/company/careers"
 tags = "fullstack, iot, backend"
-
 [[companies]]
 name = "Dropbox"
 ats = "greenhouse"
 slug = "dropbox"
-careers_url = "https://jobs.dropbox.com/"
 tags = "fullstack, backend, remote"
-
 [[companies]]
 name = "Coinbase"
 ats = "greenhouse"
 slug = "coinbase"
-careers_url = "https://www.coinbase.com/careers"
-tags = "backend, fullstack, remote"
+tags = "fintech, backend, remote"
+[[companies]]
+name = "Brex"
+ats = "greenhouse"
+slug = "brex"
+tags = "fintech, backend"
+[[companies]]
+name = "Robinhood"
+ats = "greenhouse"
+slug = "robinhood"
+tags = "fintech, backend"
+[[companies]]
+name = "Affirm"
+ats = "greenhouse"
+slug = "affirm"
+tags = "fintech, rust, backend"
+[[companies]]
+name = "Gusto"
+ats = "greenhouse"
+slug = "gusto"
+tags = "fullstack, backend"
+[[companies]]
+name = "Airtable"
+ats = "greenhouse"
+slug = "airtable"
+tags = "fullstack, frontend"
+[[companies]]
+name = "Instacart"
+ats = "greenhouse"
+slug = "instacart"
+tags = "fullstack, backend"
+[[companies]]
+name = "Lyft"
+ats = "greenhouse"
+slug = "lyft"
+tags = "backend, fullstack"
+[[companies]]
+name = "Reddit"
+ats = "greenhouse"
+slug = "reddit"
+tags = "fullstack, backend"
+[[companies]]
+name = "Pinterest"
+ats = "greenhouse"
+slug = "pinterest"
+tags = "fullstack, backend"
+[[companies]]
+name = "Datadog"
+ats = "greenhouse"
+slug = "datadog"
+tags = "infra, rust, backend"
+[[companies]]
+name = "MongoDB"
+ats = "greenhouse"
+slug = "mongodb"
+tags = "data, infra, backend"
+[[companies]]
+name = "Elastic"
+ats = "greenhouse"
+slug = "elastic"
+tags = "data, infra, remote"
+[[companies]]
+name = "Asana"
+ats = "greenhouse"
+slug = "asana"
+tags = "fullstack, frontend"
+[[companies]]
+name = "Okta"
+ats = "greenhouse"
+slug = "okta"
+tags = "backend, security"
+[[companies]]
+name = "Twilio"
+ats = "greenhouse"
+slug = "twilio"
+tags = "backend, remote"
+[[companies]]
+name = "SoFi"
+ats = "greenhouse"
+slug = "sofi"
+tags = "fintech, backend"
+[[companies]]
+name = "Chime"
+ats = "greenhouse"
+slug = "chime"
+tags = "fintech, backend"
+[[companies]]
+name = "Faire"
+ats = "greenhouse"
+slug = "faire"
+tags = "fullstack, backend"
+[[companies]]
+name = "Webflow"
+ats = "greenhouse"
+slug = "webflow"
+tags = "fullstack, frontend"
+[[companies]]
+name = "Vercel"
+ats = "greenhouse"
+slug = "vercel"
+tags = "fullstack, frontend, infra"
+[[companies]]
+name = "Cockroach Labs"
+ats = "greenhouse"
+slug = "cockroachlabs"
+tags = "rust, data, infra"
+[[companies]]
+name = "Grafana Labs"
+ats = "greenhouse"
+slug = "grafanalabs"
+tags = "infra, remote, backend"
+[[companies]]
+name = "Postman"
+ats = "greenhouse"
+slug = "postman"
+tags = "backend, fullstack"
+[[companies]]
+name = "Scale AI"
+ats = "greenhouse"
+slug = "scaleai"
+tags = "ai, backend"
+[[companies]]
+name = "Together AI"
+ats = "greenhouse"
+slug = "togetherai"
+tags = "ai, llm, infra"
+
+# ---- Ashby ----
+[[companies]]
+name = "OpenAI"
+ats = "ashby"
+slug = "openai"
+tags = "ai, llm, backend"
+[[companies]]
+name = "Cohere"
+ats = "ashby"
+slug = "cohere"
+tags = "ai, llm, backend"
+[[companies]]
+name = "Notion"
+ats = "ashby"
+slug = "notion"
+tags = "fullstack, frontend"
+[[companies]]
+name = "Linear"
+ats = "ashby"
+slug = "linear"
+tags = "fullstack, frontend, rust"
+[[companies]]
+name = "Ramp"
+ats = "ashby"
+slug = "ramp"
+tags = "fintech, fullstack"
+[[companies]]
+name = "Vanta"
+ats = "ashby"
+slug = "vanta"
+tags = "backend, security"
+[[companies]]
+name = "Replit"
+ats = "ashby"
+slug = "replit"
+tags = "ai, fullstack, infra"
+[[companies]]
+name = "Perplexity"
+ats = "ashby"
+slug = "perplexity"
+tags = "ai, llm, fullstack"
+[[companies]]
+name = "Runway"
+ats = "ashby"
+slug = "runway"
+tags = "ai, fullstack"
+[[companies]]
+name = "Sierra"
+ats = "ashby"
+slug = "sierra"
+tags = "ai, llm, backend"
+[[companies]]
+name = "Harvey"
+ats = "ashby"
+slug = "harvey"
+tags = "ai, llm, fullstack"
+[[companies]]
+name = "Writer"
+ats = "ashby"
+slug = "writer"
+tags = "ai, llm, backend"
+[[companies]]
+name = "ClickHouse"
+ats = "ashby"
+slug = "clickhouse"
+tags = "rust, data, infra"
+[[companies]]
+name = "Temporal"
+ats = "ashby"
+slug = "temporal"
+tags = "infra, backend, remote"
+[[companies]]
+name = "Supabase"
+ats = "ashby"
+slug = "supabase"
+tags = "rust, infra, fullstack"
+[[companies]]
+name = "Render"
+ats = "ashby"
+slug = "render"
+tags = "infra, backend"
+[[companies]]
+name = "Baseten"
+ats = "ashby"
+slug = "baseten"
+tags = "ai, llm, infra"
+
+# ---- Lever ----
+[[companies]]
+name = "Spotify"
+ats = "lever"
+slug = "spotify"
+tags = "backend, fullstack"
+[[companies]]
+name = "Ledger"
+ats = "lever"
+slug = "ledger"
+tags = "rust, crypto, backend"
+
+# ---- Workable ----
+[[companies]]
+name = "Moneyfarm"
+ats = "workable"
+slug = "moneyfarm"
+tags = "fintech, fullstack, eu"
+
+# ---- Recruitee ----
+[[companies]]
+name = "Personio"
+ats = "recruitee"
+slug = "personio"
+tags = "fullstack, eu"

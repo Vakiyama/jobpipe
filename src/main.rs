@@ -4,6 +4,7 @@ mod db;
 mod migration;
 mod normalize;
 mod report;
+mod sniff;
 mod sources;
 mod triage;
 
@@ -44,6 +45,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Init { companies } => cmd_init(&cli.db, &companies).await,
+        Command::Companies { action } => cmd_companies(&cli.db, action).await,
         Command::Fetch { only } => cmd_fetch(&cli.db, only.as_deref()).await,
         Command::Triage {
             limit,
@@ -79,6 +81,64 @@ async fn cmd_init(db_path: &str, companies_path: &str) -> Result<()> {
         "Initialized {db_path}. Seeded {inserted} new compan{} ({total} total).",
         if inserted == 1 { "y" } else { "ies" }
     );
+    Ok(())
+}
+
+async fn cmd_companies(db_path: &str, action: cli::CompaniesAction) -> Result<()> {
+    use cli::CompaniesAction;
+    let conn = db::connect(db_path).await?;
+    match action {
+        CompaniesAction::Add(add) => {
+            let client = sources::http_client();
+            let detected = sniff::detect(&client, &add.url).await?;
+            let inserted = queries::add_company(
+                &conn,
+                &detected.name,
+                &detected.ats,
+                &detected.slug,
+                Some(&add.url),
+            )
+            .await?;
+            if inserted {
+                println!(
+                    "Added {} — {}/{} ({}).",
+                    detected.name, detected.ats, detected.slug, add.url
+                );
+            } else {
+                println!(
+                    "Already tracked: {}/{} — nothing added.",
+                    detected.ats, detected.slug
+                );
+            }
+        }
+        CompaniesAction::List { needs_review } => {
+            let companies = queries::list_companies(&conn, needs_review).await?;
+            if companies.is_empty() {
+                println!(
+                    "No companies{}.",
+                    if needs_review { " need review" } else { "" }
+                );
+                return Ok(());
+            }
+            for c in &companies {
+                let flag = if c.needs_review == 1 {
+                    " [needs-review]"
+                } else {
+                    ""
+                };
+                let tags = c.tags.as_deref().unwrap_or("");
+                println!("{:<11} {:<22} {}{}", c.ats, c.slug, c.name, flag);
+                if !tags.is_empty() {
+                    println!("            tags: {tags}");
+                }
+            }
+            println!(
+                "\n{} compan{}.",
+                companies.len(),
+                if companies.len() == 1 { "y" } else { "ies" }
+            );
+        }
+    }
     Ok(())
 }
 

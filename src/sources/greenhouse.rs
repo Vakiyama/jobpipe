@@ -2,8 +2,7 @@
 //!
 //! Response shape (verified live): `{ "jobs": [ { id, title, absolute_url,
 //! location: { name }, content } ] }`. `content` is HTML with the entities
-//! escaped once (`&lt;p&gt;`), so we decode entities here; tag stripping happens
-//! in `normalize`.
+//! escaped once (`&lt;p&gt;`); `normalize` decodes entities and strips tags.
 
 use async_trait::async_trait;
 use reqwest::{Client, StatusCode};
@@ -66,18 +65,15 @@ impl JobSource for Greenhouse {
         let postings = body
             .jobs
             .into_iter()
-            .map(|j| {
-                let description = j
-                    .content
-                    .map(|c| html_escape::decode_html_entities(&c).into_owned())
-                    .unwrap_or_default();
-                RawPosting {
-                    external_id: j.id.to_string(),
-                    title: j.title,
-                    location: j.location.and_then(|l| l.name),
-                    description,
-                    apply_url: j.absolute_url,
-                }
+            .map(|j| RawPosting {
+                external_id: j.id.to_string(),
+                title: j.title,
+                location: j.location.and_then(|l| l.name),
+                // Content is HTML with entities escaped once; normalize decodes
+                // and strips it.
+                description: j.content.unwrap_or_default(),
+                apply_url: j.absolute_url,
+                remote: None,
             })
             .collect();
         Ok(postings)

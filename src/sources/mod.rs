@@ -1,7 +1,11 @@
 //! Job sources. The [`JobSource`] trait is the key seam: adding an ATS means one
 //! new file here and one line in [`source_for`].
 
+pub mod ashby;
 pub mod greenhouse;
+pub mod lever;
+pub mod recruitee;
+pub mod workable;
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -24,6 +28,9 @@ pub struct RawPosting {
     pub location: Option<String>,
     pub description: String,
     pub apply_url: String,
+    /// A canonical remote flag when the ATS states it explicitly
+    /// (remote | hybrid | onsite). `None` lets normalize infer from location.
+    pub remote: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +70,10 @@ pub fn http_client() -> Client {
 pub fn source_for(ats: &str, client: &Client) -> Option<Box<dyn JobSource>> {
     match ats {
         "greenhouse" => Some(Box::new(greenhouse::Greenhouse::new(client.clone()))),
+        "lever" => Some(Box::new(lever::Lever::new(client.clone()))),
+        "ashby" => Some(Box::new(ashby::Ashby::new(client.clone()))),
+        "workable" => Some(Box::new(workable::Workable::new(client.clone()))),
+        "recruitee" => Some(Box::new(recruitee::Recruitee::new(client.clone()))),
         _ => None,
     }
 }

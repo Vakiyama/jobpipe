@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -22,6 +22,12 @@ pub enum Command {
         /// Company seed file.
         #[arg(long, default_value = "companies.toml")]
         companies: String,
+    },
+
+    /// Manage the company list.
+    Companies {
+        #[command(subcommand)]
+        action: CompaniesAction,
     },
 
     /// Poll all active boards and upsert postings.
@@ -61,6 +67,23 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = DigestFormat::Term)]
         format: DigestFormat,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CompaniesAction {
+    /// Detect the ATS from a careers URL and insert the company.
+    Add(CompaniesAdd),
+    /// List companies, optionally only those needing review.
+    List {
+        #[arg(long)]
+        needs_review: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+pub struct CompaniesAdd {
+    /// A careers or job-board URL (e.g. https://jobs.lever.co/acme).
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

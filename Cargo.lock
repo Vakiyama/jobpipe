@@ -1146,6 +1146,7 @@ dependencies = [
  "dotenvy",
  "futures",
  "html-escape",
+ "once_cell",
  "regex",
  "reqwest",
  "sea-orm",

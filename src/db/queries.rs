@@ -64,6 +64,54 @@ pub async fn seed_companies(db: &DatabaseConnection, seeds: &[SeedCompany]) -> R
     Ok(after - before)
 }
 
+/// Insert one company from `companies add`. Returns false if `(ats, slug)`
+/// already exists (no duplicate created).
+pub async fn add_company(
+    db: &DatabaseConnection,
+    name: &str,
+    ats: &str,
+    slug: &str,
+    careers_url: Option<&str>,
+) -> Result<bool> {
+    let existing = Company::find()
+        .filter(company::Column::Ats.eq(ats))
+        .filter(company::Column::Slug.eq(slug))
+        .one(db)
+        .await?;
+    if existing.is_some() {
+        return Ok(false);
+    }
+    company::ActiveModel {
+        name: Set(name.to_string()),
+        ats: Set(ats.to_string()),
+        slug: Set(slug.to_string()),
+        careers_url: Set(careers_url.map(str::to_string)),
+        tags: Set(None),
+        active: Set(1),
+        needs_review: Set(0),
+        last_fetched: Set(None),
+        ..Default::default()
+    }
+    .insert(db)
+    .await?;
+    Ok(true)
+}
+
+/// All companies for `companies list`, optionally only those flagged for review.
+pub async fn list_companies(
+    db: &DatabaseConnection,
+    needs_review_only: bool,
+) -> Result<Vec<company::Model>> {
+    let mut q = Company::find();
+    if needs_review_only {
+        q = q.filter(company::Column::NeedsReview.eq(1));
+    }
+    Ok(q.order_by_asc(company::Column::Ats)
+        .order_by_asc(company::Column::Name)
+        .all(db)
+        .await?)
+}
+
 /// All active companies, optionally filtered to a single ATS.
 pub async fn active_companies(
     db: &DatabaseConnection,
