@@ -1,0 +1,73 @@
+# Phase 1 seed: 10 hand-picked Greenhouse boards, weighted toward Rust-heavy
+# shops and full-stack employers that fit the candidate profile.
+# Each board is public and fetched by slug: boards-api.greenhouse.io/v1/boards/<slug>/jobs
+
+[[companies]]
+name = "GitLab"
+ats = "greenhouse"
+slug = "gitlab"
+careers_url = "https://about.gitlab.com/jobs/"
+tags = "remote, rust, backend"
+
+[[companies]]
+name = "Cloudflare"
+ats = "greenhouse"
+slug = "cloudflare"
+careers_url = "https://www.cloudflare.com/careers/"
+tags = "rust, infra, backend"
+
+[[companies]]
+name = "Discord"
+ats = "greenhouse"
+slug = "discord"
+careers_url = "https://discord.com/careers"
+tags = "rust, realtime, backend"
+
+[[companies]]
+name = "Anthropic"
+ats = "greenhouse"
+slug = "anthropic"
+careers_url = "https://www.anthropic.com/careers"
+tags = "ai, llm, backend"
+
+[[companies]]
+name = "Databricks"
+ats = "greenhouse"
+slug = "databricks"
+careers_url = "https://www.databricks.com/company/careers"
+tags = "data, backend, rust"
+
+[[companies]]
+name = "Stripe"
+ats = "greenhouse"
+slug = "stripe"
+careers_url = "https://stripe.com/jobs"
+tags = "fullstack, backend, fintech"
+
+[[companies]]
+name = "Figma"
+ats = "greenhouse"
+slug = "figma"
+careers_url = "https://www.figma.com/careers/"
+tags = "fullstack, frontend, realtime"
+
+[[companies]]
+name = "Samsara"
+ats = "greenhouse"
+slug = "samsara"
+careers_url = "https://www.samsara.com/company/careers"
+tags = "fullstack, iot, backend"
+
+[[companies]]
+name = "Dropbox"
+ats = "greenhouse"
+slug = "dropbox"
+careers_url = "https://jobs.dropbox.com/"
+tags = "fullstack, backend, remote"
+
+[[companies]]
+name = "Coinbase"
+ats = "greenhouse"
+slug = "coinbase"
+careers_url = "https://www.coinbase.com/careers"
+tags = "backend, fullstack, remote"
