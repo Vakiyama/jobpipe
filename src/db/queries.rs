@@ -3,7 +3,8 @@
 use anyhow::{Context, Result};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set,
 };
 
 use super::entities::prelude::{Company, Posting};
@@ -169,16 +170,60 @@ pub async fn close_stale_postings(
     Ok(res.rows_affected)
 }
 
-/// Open postings for the digest, newest first, each paired with its company.
+/// Untriaged, still-open postings awaiting a score. `triaged_at IS NULL` is the
+/// contract from the spec — a posting is never re-scored once triaged.
+pub async fn untriaged_postings(
+    db: &DatabaseConnection,
+    limit: Option<u64>,
+) -> Result<Vec<posting::Model>> {
+    let mut q = Posting::find()
+        .filter(posting::Column::TriagedAt.is_null())
+        .filter(posting::Column::ClosedAt.is_null())
+        .order_by_asc(posting::Column::FirstSeen);
+    if let Some(n) = limit {
+        q = q.limit(n);
+    }
+    Ok(q.all(db).await?)
+}
+
+/// Persist a triage result on a posting: score, one-line reason, JSON flags
+/// array, and the `triaged_at` stamp that removes it from future triage runs.
+pub async fn set_triage(
+    db: &DatabaseConnection,
+    posting_id: i32,
+    score: i32,
+    reason: &str,
+    flags_json: &str,
+    now: &str,
+) -> Result<()> {
+    Posting::update_many()
+        .col_expr(posting::Column::Score, Expr::value(score))
+        .col_expr(posting::Column::ScoreReason, Expr::value(reason))
+        .col_expr(posting::Column::Flags, Expr::value(flags_json))
+        .col_expr(posting::Column::TriagedAt, Expr::value(now))
+        .filter(posting::Column::Id.eq(posting_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+/// Open postings for the digest, each paired with its company. When `min_score`
+/// is set, only postings scored at or above it are returned (untriaged rows have
+/// a NULL score and are excluded); results are ranked by score then recency.
 pub async fn open_postings(
     db: &DatabaseConnection,
     since: Option<&str>,
+    min_score: Option<i32>,
 ) -> Result<Vec<(posting::Model, Option<company::Model>)>> {
     let mut q = Posting::find().filter(posting::Column::ClosedAt.is_null());
     if let Some(s) = since {
         q = q.filter(posting::Column::FirstSeen.gte(s));
     }
-    Ok(q.order_by_desc(posting::Column::FirstSeen)
+    if let Some(m) = min_score {
+        q = q.filter(posting::Column::Score.gte(m));
+    }
+    Ok(q.order_by_desc(posting::Column::Score)
+        .order_by_desc(posting::Column::FirstSeen)
         .find_also_related(Company)
         .all(db)
         .await?)

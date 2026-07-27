@@ -42,3 +42,11 @@ pub fn load_companies(path: &Path) -> Result<Vec<SeedCompany>> {
         })
         .collect())
 }
+
+/// Load the raw `profile.toml` text for embedding in the triage prompt. We pass
+/// the TOML through verbatim rather than reshaping it — the candidate profile is
+/// human-authored context for the model, and every field is relevant.
+pub fn load_profile_text(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path)
+        .with_context(|| format!("reading candidate profile {}", path.display()))
+}

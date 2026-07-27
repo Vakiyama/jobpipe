@@ -37,6 +37,14 @@ fn loc(p: &posting::Model) -> String {
     }
 }
 
+/// A score badge like `[9]`, or `[–]` when a posting hasn't been triaged yet.
+fn badge(p: &posting::Model) -> String {
+    match p.score {
+        Some(s) => format!("[{s:>2}]"),
+        None => "[ –]".to_string(),
+    }
+}
+
 fn render_term(rows: &[(posting::Model, Option<company::Model>)]) -> String {
     let mut out = String::new();
     out.push_str(&format!(
@@ -46,8 +54,16 @@ fn render_term(rows: &[(posting::Model, Option<company::Model>)]) -> String {
     out.push_str(&"=".repeat(48));
     out.push('\n');
     for (p, c) in rows {
-        out.push_str(&format!("\n{}  —  {}\n", p.title, company_name(c)));
+        out.push_str(&format!(
+            "\n{} {}  —  {}\n",
+            badge(p),
+            p.title,
+            company_name(c)
+        ));
         out.push_str(&format!("  {}\n", loc(p)));
+        if let Some(reason) = &p.score_reason {
+            out.push_str(&format!("  {reason}\n"));
+        }
         out.push_str(&format!("  {}\n", p.apply_url));
     }
     out
@@ -61,12 +77,16 @@ fn render_md(rows: &[(posting::Model, Option<company::Model>)]) -> String {
     ));
     for (p, c) in rows {
         out.push_str(&format!(
-            "- **[{}]({})** — {} · {}\n",
+            "- **{} [{}]({})** — {} · {}\n",
+            badge(p),
             p.title,
             p.apply_url,
             company_name(c),
             loc(p)
         ));
+        if let Some(reason) = &p.score_reason {
+            out.push_str(&format!("  - {reason}\n"));
+        }
     }
     out
 }

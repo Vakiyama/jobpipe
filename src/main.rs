@@ -5,6 +5,7 @@ mod migration;
 mod normalize;
 mod report;
 mod sources;
+mod triage;
 
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
@@ -27,6 +28,10 @@ const FETCH_CONCURRENCY: usize = 10;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load .env if present so secrets like ANTHROPIC_API_KEY can live in a file
+    // instead of the shell. A real environment variable still wins over .env.
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -40,7 +45,16 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Init { companies } => cmd_init(&cli.db, &companies).await,
         Command::Fetch { only } => cmd_fetch(&cli.db, only.as_deref()).await,
-        Command::Digest { since, format } => cmd_digest(&cli.db, since.as_deref(), format).await,
+        Command::Triage {
+            limit,
+            dry_run,
+            profile,
+        } => cmd_triage(&cli.db, limit, dry_run, &profile).await,
+        Command::Digest {
+            min_score,
+            since,
+            format,
+        } => cmd_digest(&cli.db, min_score, since.as_deref(), format).await,
     }
 }
 
@@ -182,13 +196,33 @@ async fn fetch_one(
     }
 }
 
-async fn cmd_digest(db_path: &str, since: Option<&str>, format: DigestFormat) -> Result<()> {
+async fn cmd_triage(
+    db_path: &str,
+    limit: Option<u64>,
+    dry_run: bool,
+    profile_path: &str,
+) -> Result<()> {
+    let conn = db::connect(db_path).await?;
+    let path = Path::new(profile_path);
+    if !path.exists() {
+        anyhow::bail!("{profile_path} not found — it holds the candidate profile for scoring");
+    }
+    let profile_text = config::load_profile_text(path)?;
+    triage::run(&conn, limit, dry_run, &profile_text).await
+}
+
+async fn cmd_digest(
+    db_path: &str,
+    min_score: i32,
+    since: Option<&str>,
+    format: DigestFormat,
+) -> Result<()> {
     let conn = db::connect(db_path).await?;
     let cutoff = match since {
         Some(s) => Some(parse_since(s)?),
         None => None,
     };
-    let rows = queries::open_postings(&conn, cutoff.as_deref()).await?;
+    let rows = queries::open_postings(&conn, cutoff.as_deref(), Some(min_score)).await?;
     let format = match format {
         DigestFormat::Term => report::Format::Term,
         DigestFormat::Md => report::Format::Md,
