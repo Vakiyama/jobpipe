@@ -10,7 +10,15 @@ pub enum Format {
 }
 
 /// Render the digest. `rows` is newest-first, each posting paired with its company.
-pub fn render(rows: &[(posting::Model, Option<company::Model>)], format: Format) -> String {
+///
+/// `hyperlinks` turns the term-format apply URL into a clickable OSC 8 link;
+/// callers should pass this only when stdout is a real terminal, since the
+/// escape sequences would otherwise leak into pipes and files.
+pub fn render(
+    rows: &[(posting::Model, Option<company::Model>)],
+    format: Format,
+    hyperlinks: bool,
+) -> String {
     if rows.is_empty() {
         return match format {
             Format::Term => "No open postings.\n".to_string(),
@@ -19,9 +27,15 @@ pub fn render(rows: &[(posting::Model, Option<company::Model>)], format: Format)
     }
 
     match format {
-        Format::Term => render_term(rows),
+        Format::Term => render_term(rows, hyperlinks),
         Format::Md => render_md(rows),
     }
+}
+
+/// Wrap `text` in an OSC 8 terminal hyperlink pointing at `url`. Terminals that
+/// don't understand the sequence ignore it and show `text` alone.
+fn osc8(url: &str, text: &str) -> String {
+    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
 }
 
 fn company_name(c: &Option<company::Model>) -> &str {
@@ -45,7 +59,7 @@ fn badge(p: &posting::Model) -> String {
     }
 }
 
-fn render_term(rows: &[(posting::Model, Option<company::Model>)]) -> String {
+fn render_term(rows: &[(posting::Model, Option<company::Model>)], hyperlinks: bool) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "jobpipe digest — {} open posting(s)\n",
@@ -55,8 +69,9 @@ fn render_term(rows: &[(posting::Model, Option<company::Model>)]) -> String {
     out.push('\n');
     for (p, c) in rows {
         out.push_str(&format!(
-            "\n{} {}  —  {}\n",
+            "\n{} #{}  {}  —  {}\n",
             badge(p),
+            p.id,
             p.title,
             company_name(c)
         ));
@@ -64,7 +79,12 @@ fn render_term(rows: &[(posting::Model, Option<company::Model>)]) -> String {
         if let Some(reason) = &p.score_reason {
             out.push_str(&format!("  {reason}\n"));
         }
-        out.push_str(&format!("  {}\n", p.apply_url));
+        if hyperlinks {
+            out.push_str(&format!("  {}\n", osc8(&p.apply_url, "Apply in browser ↗")));
+        } else {
+            out.push_str(&format!("  {}\n", p.apply_url));
+        }
+        out.push_str(&format!("  → jobpipe apply {}\n", p.id));
     }
     out
 }
@@ -77,8 +97,9 @@ fn render_md(rows: &[(posting::Model, Option<company::Model>)]) -> String {
     ));
     for (p, c) in rows {
         out.push_str(&format!(
-            "- **{} [{}]({})** — {} · {}\n",
+            "- **{} #{} [{}]({})** — {} · {}\n",
             badge(p),
+            p.id,
             p.title,
             p.apply_url,
             company_name(c),
@@ -87,6 +108,7 @@ fn render_md(rows: &[(posting::Model, Option<company::Model>)]) -> String {
         if let Some(reason) = &p.score_reason {
             out.push_str(&format!("  - {reason}\n"));
         }
+        out.push_str(&format!("  - `jobpipe apply {}`\n", p.id));
     }
     out
 }

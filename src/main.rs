@@ -14,10 +14,11 @@ use clap::Parser;
 use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use sea_orm::DatabaseConnection;
+use std::io::IsTerminal;
 use std::path::Path;
 use tracing::{info, warn};
 
-use cli::{Cli, Command, DigestFormat};
+use cli::{Cli, Command, DigestFormat, Stage};
 use db::entities::company;
 use db::queries::{self, UpsertOutcome};
 use sources::{source_for, FetchError};
@@ -53,12 +54,12 @@ async fn main() -> Result<()> {
             profile,
         } => cmd_triage(&cli.db, limit, dry_run, &profile).await,
         Command::Apply { posting_id } => cmd_apply(&cli.db, posting_id).await,
-        Command::Track { stage } => cmd_track(&cli.db, stage.as_deref()).await,
+        Command::Track { stage } => cmd_track(&cli.db, stage).await,
         Command::Stage {
             application_id,
             stage,
             note,
-        } => cmd_stage(&cli.db, application_id, &stage, note.as_deref()).await,
+        } => cmd_stage(&cli.db, application_id, stage, note.as_deref()).await,
         Command::Followup => cmd_followup(&cli.db).await,
         Command::Digest {
             min_score,
@@ -113,8 +114,15 @@ fn days_since(ts: &str, now: chrono::DateTime<Utc>) -> Option<i64> {
         .map(|t| (now - t.with_timezone(&Utc)).num_days())
 }
 
-async fn cmd_apply(db_path: &str, posting_id: i32) -> Result<()> {
+async fn cmd_apply(db_path: &str, posting_id: Option<i32>) -> Result<()> {
     let conn = db::connect(db_path).await?;
+    let posting_id = match posting_id {
+        Some(id) => id,
+        None => match pick_posting(&conn).await? {
+            Some(id) => id,
+            None => return Ok(()), // nothing to pick, or the user cancelled
+        },
+    };
     let Some((posting, company)) = queries::posting_with_company(&conn, posting_id).await? else {
         anyhow::bail!("no posting with id {posting_id} — check `jobpipe digest`");
     };
@@ -143,19 +151,48 @@ async fn cmd_apply(db_path: &str, posting_id: i32) -> Result<()> {
     Ok(())
 }
 
+/// Interactive posting picker for `apply` with no id. Returns the chosen
+/// posting id, or `None` if there's nothing to pick or the user cancels.
+async fn pick_posting(conn: &DatabaseConnection) -> Result<Option<i32>> {
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "no posting id given and stdin is not a terminal — pass an id, e.g. `jobpipe apply 3909`"
+        );
+    }
+    let rows = queries::unapplied_open_postings(conn, Some(cli::DEFAULT_MIN_SCORE)).await?;
+    if rows.is_empty() {
+        println!(
+            "No unapplied postings at score >= {} — apply by id with `jobpipe apply <id>`, \
+             lower the bar via `jobpipe digest --min-score N`, or `jobpipe fetch` for more.",
+            cli::DEFAULT_MIN_SCORE
+        );
+        return Ok(None);
+    }
+    let items: Vec<String> = rows
+        .iter()
+        .map(|(p, c)| {
+            let score = p
+                .score
+                .map(|s| format!("[{s:>2}]"))
+                .unwrap_or_else(|| "[ –]".to_string());
+            format!("{score} #{} {} — {}", p.id, p.title, company_name(c))
+        })
+        .collect();
+    let selection = dialoguer::FuzzySelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
+        .with_prompt("Pick a posting to apply to (type to filter)")
+        .items(&items)
+        .default(0)
+        .max_length(15)
+        .interact_opt()?;
+    Ok(selection.map(|i| rows[i].0.id))
+}
+
 fn applied_date(ts: &str) -> &str {
     ts.split('T').next().unwrap_or(ts)
 }
 
-async fn cmd_track(db_path: &str, stage: Option<&str>) -> Result<()> {
-    if let Some(s) = stage {
-        if !queries::STAGES.contains(&s) {
-            anyhow::bail!(
-                "invalid stage '{s}' — expected one of {:?}",
-                queries::STAGES
-            );
-        }
-    }
+async fn cmd_track(db_path: &str, stage: Option<Stage>) -> Result<()> {
+    let stage = stage.map(Stage::as_str);
     let conn = db::connect(db_path).await?;
     let rows = queries::list_applications(&conn, stage).await?;
     if rows.is_empty() {
@@ -171,8 +208,9 @@ async fn cmd_track(db_path: &str, stage: Option<&str>) -> Result<()> {
             .map(|p| p.title.as_str())
             .unwrap_or("(posting gone)");
         println!(
-            "#{:<4} {:<9} {}  —  {}  (applied {})",
+            "app #{:<4} job #{:<5} {:<9} {}  —  {}  (applied {})",
             a.id,
+            a.posting_id,
             a.stage,
             title,
             company_name(company),
@@ -186,15 +224,10 @@ async fn cmd_track(db_path: &str, stage: Option<&str>) -> Result<()> {
 async fn cmd_stage(
     db_path: &str,
     application_id: i32,
-    stage: &str,
+    stage: Stage,
     note: Option<&str>,
 ) -> Result<()> {
-    if !queries::STAGES.contains(&stage) {
-        anyhow::bail!(
-            "invalid stage '{stage}' — expected one of {:?}",
-            queries::STAGES
-        );
-    }
+    let stage = stage.as_str();
     let conn = db::connect(db_path).await?;
     let now = Utc::now();
     let updated = queries::update_application_stage(
@@ -489,7 +522,7 @@ async fn cmd_digest(
 
     // A file report is always markdown; stdout honors --format.
     if let Some(path) = out {
-        let md = report::render(&rows, report::Format::Md);
+        let md = report::render(&rows, report::Format::Md, false);
         std::fs::write(path, md).with_context(|| format!("writing digest to {path}"))?;
         println!("Wrote {} posting(s) to {path}.", rows.len());
     } else {
@@ -497,7 +530,10 @@ async fn cmd_digest(
             DigestFormat::Term => report::Format::Term,
             DigestFormat::Md => report::Format::Md,
         };
-        print!("{}", report::render(&rows, format));
+        // Clickable apply links only when stdout is a real terminal, so the
+        // escape sequences never leak into pipes or redirects.
+        let hyperlinks = std::io::stdout().is_terminal();
+        print!("{}", report::render(&rows, format, hyperlinks));
     }
     Ok(())
 }

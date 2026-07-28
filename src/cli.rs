@@ -1,5 +1,9 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+/// Default digest score threshold. Also the floor for the interactive `apply`
+/// picker, so it offers the same postings the digest surfaces.
+pub const DEFAULT_MIN_SCORE: i32 = 7;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "jobpipe",
@@ -54,16 +58,18 @@ pub enum Command {
     },
 
     /// Record an application against a posting and open its apply URL.
+    ///
+    /// With no id, opens an interactive picker over the open postings.
     Apply {
-        /// The posting id (from the digest).
-        posting_id: i32,
+        /// The posting id (from the digest). Omit to pick interactively.
+        posting_id: Option<i32>,
     },
 
     /// List open applications, optionally filtered to one stage.
     Track {
-        /// Show only this stage (applied | screen | interview | offer | rejected | ghosted).
-        #[arg(long)]
-        stage: Option<String>,
+        /// Show only this stage.
+        #[arg(long, value_enum)]
+        stage: Option<Stage>,
     },
 
     /// Move an application to a new stage.
@@ -71,7 +77,8 @@ pub enum Command {
         /// The application id (from `track`).
         application_id: i32,
         /// The new stage.
-        stage: String,
+        #[arg(value_enum)]
+        stage: Stage,
         /// A note to append to the application, dated.
         #[arg(long)]
         note: Option<String>,
@@ -83,7 +90,7 @@ pub enum Command {
     /// Print the digest of open postings.
     Digest {
         /// Only show postings scored at or above this threshold.
-        #[arg(long, default_value_t = 7)]
+        #[arg(long, default_value_t = DEFAULT_MIN_SCORE)]
         min_score: i32,
 
         /// Only postings first seen within this window, e.g. `1d`, `3d`, `12h`.
@@ -102,7 +109,7 @@ pub enum Command {
     /// fetch + triage + digest in one shot, for a cron job.
     Run {
         /// Digest threshold.
-        #[arg(long, default_value_t = 7)]
+        #[arg(long, default_value_t = DEFAULT_MIN_SCORE)]
         min_score: i32,
 
         /// Write the markdown digest to this file (otherwise printed).
@@ -136,4 +143,30 @@ pub struct CompaniesAdd {
 pub enum DigestFormat {
     Term,
     Md,
+}
+
+/// The canonical application stages, in order. Single source of truth: clap
+/// validates CLI input against these variants and renders them in `--help`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Stage {
+    Applied,
+    Screen,
+    Interview,
+    Offer,
+    Rejected,
+    Ghosted,
+}
+
+impl Stage {
+    /// The canonical lowercase string stored in the database.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stage::Applied => "applied",
+            Stage::Screen => "screen",
+            Stage::Interview => "interview",
+            Stage::Offer => "offer",
+            Stage::Rejected => "rejected",
+            Stage::Ghosted => "ghosted",
+        }
+    }
 }

@@ -11,16 +11,6 @@ use super::entities::prelude::{Application, Company, Posting};
 use super::entities::{application, company, posting};
 use crate::normalize::NormalizedPosting;
 
-/// The canonical application stages, in order. `stage` validates against this.
-pub const STAGES: [&str; 6] = [
-    "applied",
-    "screen",
-    "interview",
-    "offer",
-    "rejected",
-    "ghosted",
-];
-
 /// A company to seed from `companies.toml`.
 pub struct SeedCompany {
     pub name: String,
@@ -277,6 +267,32 @@ pub async fn open_postings(
     if let Some(s) = since {
         q = q.filter(posting::Column::FirstSeen.gte(s));
     }
+    if let Some(m) = min_score {
+        q = q.filter(posting::Column::Score.gte(m));
+    }
+    Ok(q.order_by_desc(posting::Column::Score)
+        .order_by_desc(posting::Column::FirstSeen)
+        .find_also_related(Company)
+        .all(db)
+        .await?)
+}
+
+/// Open postings that don't yet have an application, ranked like `open_postings`.
+/// Backs the interactive `apply` picker so already-applied roles don't reappear;
+/// `min_score` mirrors the digest threshold to keep the candidate set manageable.
+pub async fn unapplied_open_postings(
+    db: &DatabaseConnection,
+    min_score: Option<i32>,
+) -> Result<Vec<(posting::Model, Option<company::Model>)>> {
+    let applied: Vec<i32> = Application::find()
+        .select_only()
+        .column(application::Column::PostingId)
+        .into_tuple()
+        .all(db)
+        .await?;
+    let mut q = Posting::find()
+        .filter(posting::Column::ClosedAt.is_null())
+        .filter(posting::Column::Id.is_not_in(applied));
     if let Some(m) = min_score {
         q = q.filter(posting::Column::Score.gte(m));
     }
