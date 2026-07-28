@@ -1,0 +1,83 @@
+# Candidate profile — copy this to `profile.toml` and edit it to describe yourself.
+#   cp profile.example.toml profile.toml
+#
+# The whole file is passed verbatim into the triage prompt, so the LLM scores
+# postings against exactly what you write here. There is no fixed schema: add or
+# drop experience/project blocks freely. Two sections are load-bearing, because
+# the scoring prompt references their field names directly:
+#
+#   [location]     — drives the HARD LOCATION GATE (base / acceptable / work_authorization)
+#   [preferences]  — drives the scoring rubric (priority / also_strong / avoid)
+#
+# Everything else is free-form context that helps the model judge fit.
+
+[candidate]
+positioning = "One-line pitch — what you build and in what stack"
+years_experience = 4
+seniority_band = "mid"   # junior | mid | senior — the band you're targeting
+titles = [
+  "Software Engineer", "Full Stack Engineer", "Backend Engineer",
+]
+education = "Your degree or program, institution, dates"
+
+[skills]
+# Group however you like — these keys are just labels the model reads.
+languages  = ["TypeScript", "Python", "Go", "SQL"]
+frameworks = ["React", "Next.js", "Node.js", "FastAPI"]
+infra      = ["AWS", "Docker", "PostgreSQL", "Redis", "GitHub Actions"]
+
+[experience.current]
+title = "Software Engineer, Example Corp"
+dates = "Jan 2023 - Present"
+summary = """
+Two or three sentences on what you shipped and the impact. Concrete systems,
+scale, and outcomes score better than adjectives.
+"""
+
+[experience.previous]
+title = "Junior Developer, Earlier Co"
+dates = "Jun 2021 - Dec 2022"
+summary = """
+What you owned, the stack, and anything measurable.
+"""
+
+[projects.side_project]
+stack = ["Rust", "PostgreSQL", "gRPC"]
+summary = """
+A notable personal or open-source project and what makes it interesting.
+"""
+
+# --- Load-bearing: the location gate reads these three fields by name. ---
+[location]
+# `base` is your home metro. The gate assumes you cannot relocate or commute
+# beyond it, so onsite/hybrid roles are only workable when the office is here.
+base = "Austin, TX, USA"
+# Human-readable list of arrangements you'll accept. Describe them plainly;
+# the model matches a posting's location against these.
+acceptable = ["Austin / Greater Austin", "US remote", "North America remote"]
+# The country/region where you are legally authorized to work. Remote roles are
+# only workable if remote is allowed in this region.
+work_authorization = "United States"
+
+# --- Load-bearing: the scoring rubric reads these three fields by name. ---
+[preferences]
+# Your highest-value target — roles matching this rank 9-10.
+priority = "Backend roles in Go or Rust rank highest"
+# A genuine second specialty — roles matching this rank 7-8.
+also_strong = "Full-stack TypeScript/React product work"
+# Dealbreakers — a posting hitting any of these is capped low.
+avoid = ["equity-only", "commission-based", "clearance-required"]
+
+# --- Optional: the code-side pre-filter (runs before the LLM, saves cost). ---
+# A posting whose TITLE matches any `reject_titles` term is dropped before the LLM
+# ever scores it — unless its DESCRIPTION mentions a `keep_keywords` term, which
+# rescues it. Both are matched case-insensitively on word boundaries.
+#
+# Omit this whole section to use the conservative default (reject only
+# "Recruiter", "Sales", "Marketing"; no rescue keyword). Tune it to your search —
+# e.g. a senior candidate should NOT reject "Principal"/"Staff".
+[prefilter]
+reject_titles = ["Director", "VP", "Manager", "Intern", "Recruiter", "Sales", "Marketing"]
+# Rescue a rejected title if the description mentions your priority stack, so a
+# "Staff Engineer (Rust)" still gets scored. Leave empty for no rescue.
+keep_keywords = ["Rust"]

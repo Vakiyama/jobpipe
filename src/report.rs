@@ -59,6 +59,69 @@ fn badge(p: &posting::Model) -> String {
     }
 }
 
+/// A one-glance summary of a posting: score badge, title, company, location, and
+/// the triage reason line (the same "short description" the digest shows). Shared
+/// by the `apply` preview and `show`.
+pub fn summary(p: &posting::Model, c: &Option<company::Model>) -> String {
+    let mut out = format!(
+        "{} #{}  {}  —  {}\n",
+        badge(p),
+        p.id,
+        p.title,
+        company_name(c)
+    );
+    out.push_str(&format!("  {}\n", loc(p)));
+    if let Some(reason) = &p.score_reason {
+        out.push_str(&format!("  {reason}\n"));
+    }
+    out
+}
+
+/// Full detail for `show` and the `apply` "view full" option: the summary plus
+/// the apply URL and the whole job description, word-wrapped for readability
+/// (descriptions are stored as a single collapsed line of plain text).
+pub fn detail(p: &posting::Model, c: &Option<company::Model>) -> String {
+    let mut out = summary(p, c);
+    out.push_str(&format!("  apply: {}\n\n", p.apply_url));
+    out.push_str(&wrap(&p.description, 96));
+    out.push('\n');
+    out
+}
+
+/// Greedy word-wrap to `width` columns, wrapping each line of `clean_html`'s
+/// output on its own so its paragraph/blank-line/bullet structure survives
+/// (terminals soft-wrap, but that breaks mid-word and ignores the line breaks).
+/// A wrapped bullet's continuation lines hang under its text, clear of the `• `.
+fn wrap(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    for line in text.split('\n') {
+        if line.trim().is_empty() {
+            out.push('\n');
+            continue;
+        }
+        let indent = if line.starts_with("• ") { "  " } else { "" };
+        let mut col = 0;
+        for word in line.split_whitespace() {
+            let w = word.chars().count();
+            if col == 0 {
+                out.push_str(word);
+                col = w;
+            } else if col + 1 + w <= width {
+                out.push(' ');
+                out.push_str(word);
+                col += 1 + w;
+            } else {
+                out.push('\n');
+                out.push_str(indent);
+                out.push_str(word);
+                col = indent.len() + w;
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
 fn render_term(rows: &[(posting::Model, Option<company::Model>)], hyperlinks: bool) -> String {
     let mut out = String::new();
     out.push_str(&format!(

@@ -25,6 +25,9 @@ pub struct Model {
     /// json array
     pub flags: Option<String>,
     pub triaged_at: Option<String>,
+    /// User-set "hide from the digest and apply picker" stamp; null when not
+    /// dismissed. Kept separate from `score` so it never masquerades as triage.
+    pub dismissed_at: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter)]

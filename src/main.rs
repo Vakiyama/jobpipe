@@ -19,7 +19,7 @@ use std::path::Path;
 use tracing::{info, warn};
 
 use cli::{Cli, Command, DigestFormat, Stage};
-use db::entities::company;
+use db::entities::{company, posting};
 use db::queries::{self, UpsertOutcome};
 use sources::{source_for, FetchError};
 
@@ -45,16 +45,21 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Command::Setup { force } => cmd_setup(force),
         Command::Init { companies } => cmd_init(&cli.db, &companies).await,
         Command::Companies { action } => cmd_companies(&cli.db, action).await,
         Command::Fetch { only } => cmd_fetch(&cli.db, only.as_deref()).await,
         Command::Triage {
             limit,
             dry_run,
+            retriage,
             profile,
-        } => cmd_triage(&cli.db, limit, dry_run, &profile).await,
-        Command::Apply { posting_id } => cmd_apply(&cli.db, posting_id).await,
+        } => cmd_triage(&cli.db, limit, dry_run, retriage, &profile).await,
+        Command::Apply { posting_id, yes } => cmd_apply(&cli.db, posting_id, yes).await,
+        Command::Show { posting_id } => cmd_show(&cli.db, posting_id).await,
+        Command::Dismiss { posting_id, undo } => cmd_dismiss(&cli.db, posting_id, undo).await,
         Command::Track { stage } => cmd_track(&cli.db, stage).await,
+        Command::Untrack { application_id } => cmd_untrack(&cli.db, application_id).await,
         Command::Stage {
             application_id,
             stage,
@@ -80,7 +85,7 @@ async fn main() -> Result<()> {
 /// what's already scored.
 async fn cmd_run(db_path: &str, min_score: i32, out: Option<&str>, profile: &str) -> Result<()> {
     cmd_fetch(db_path, None).await?;
-    if let Err(e) = cmd_triage(db_path, None, false, profile).await {
+    if let Err(e) = cmd_triage(db_path, None, false, false, profile).await {
         warn!("triage step failed, continuing to digest: {e:#}");
     }
     cmd_digest(db_path, min_score, None, DigestFormat::Term, out).await
@@ -114,25 +119,69 @@ fn days_since(ts: &str, now: chrono::DateTime<Utc>) -> Option<i64> {
         .map(|t| (now - t.with_timezone(&Utc)).num_days())
 }
 
-async fn cmd_apply(db_path: &str, posting_id: Option<i32>) -> Result<()> {
+async fn cmd_apply(db_path: &str, posting_id: Option<i32>, yes: bool) -> Result<()> {
     let conn = db::connect(db_path).await?;
-    let posting_id = match posting_id {
-        Some(id) => id,
-        None => match pick_posting(&conn).await? {
-            Some(id) => id,
-            None => return Ok(()), // nothing to pick, or the user cancelled
-        },
-    };
-    let Some((posting, company)) = queries::posting_with_company(&conn, posting_id).await? else {
-        anyhow::bail!("no posting with id {posting_id} — check `jobpipe digest`");
-    };
+    // On a terminal (and unless `--yes`), preview + confirm before recording.
+    let interactive = !yes && std::io::stdin().is_terminal();
+
+    // Explicit id: confirm once, then record — or bail out on cancel/dismiss.
+    if let Some(id) = posting_id {
+        let Some((posting, company)) = queries::posting_with_company(&conn, id).await? else {
+            anyhow::bail!("no posting with id {id} — check `jobpipe digest`");
+        };
+        match if interactive {
+            confirm_apply(&posting, &company)?
+        } else {
+            ApplyChoice::Apply
+        } {
+            ApplyChoice::Apply => return record_application(&conn, &posting, &company).await,
+            ApplyChoice::Dismiss => return dismiss_posting(&conn, &posting, &company).await,
+            ApplyChoice::Cancel => {
+                println!("Cancelled — no application recorded.");
+                return Ok(());
+            }
+        }
+    }
+
+    // Interactive picker: cancelling a preview loops back to the picker so you can
+    // pick again; quitting the picker itself (Esc) exits. Dismissing hides the
+    // posting and also loops back, since it drops out of the picker next round.
+    loop {
+        let Some(id) = pick_posting(&conn).await? else {
+            return Ok(());
+        };
+        let Some((posting, company)) = queries::posting_with_company(&conn, id).await? else {
+            anyhow::bail!("no posting with id {id} — check `jobpipe digest`");
+        };
+        match if interactive {
+            confirm_apply(&posting, &company)?
+        } else {
+            ApplyChoice::Apply
+        } {
+            ApplyChoice::Apply => return record_application(&conn, &posting, &company).await,
+            ApplyChoice::Dismiss => {
+                dismiss_posting(&conn, &posting, &company).await?;
+                continue;
+            }
+            ApplyChoice::Cancel => continue,
+        }
+    }
+}
+
+/// Record an application against a posting, opening its apply URL on a fresh
+/// insert. Idempotent: a second call for the same posting reports the existing one.
+async fn record_application(
+    conn: &DatabaseConnection,
+    posting: &posting::Model,
+    company: &Option<company::Model>,
+) -> Result<()> {
     let now = Utc::now().to_rfc3339();
-    match queries::create_application(&conn, posting_id, &now).await? {
+    match queries::create_application(conn, posting.id, &now).await? {
         queries::ApplyOutcome::Existing(a) => {
             println!(
                 "Already applied to \"{}\" — {} (application #{}, stage {}).",
                 posting.title,
-                company_name(&company),
+                company_name(company),
                 a.id,
                 a.stage
             );
@@ -142,13 +191,44 @@ async fn cmd_apply(db_path: &str, posting_id: Option<i32>) -> Result<()> {
                 "Recorded application #{}: \"{}\" — {}.",
                 a.id,
                 posting.title,
-                company_name(&company)
+                company_name(company)
             );
             open_url(&posting.apply_url);
             println!("Apply: {}", posting.apply_url);
         }
     }
     Ok(())
+}
+
+/// Hide a posting from the digest and apply picker, stamping `dismissed_at`.
+/// Idempotent-ish: re-dismissing simply refreshes the stamp.
+async fn dismiss_posting(
+    conn: &DatabaseConnection,
+    posting: &posting::Model,
+    company: &Option<company::Model>,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    queries::set_dismissed(conn, posting.id, Some(&now)).await?;
+    println!(
+        "Dismissed #{} \"{}\" — {}. Restore with `jobpipe dismiss {} --undo`.",
+        posting.id,
+        posting.title,
+        company_name(company),
+        posting.id
+    );
+    Ok(())
+}
+
+/// Truncate to at most `max` characters, appending `…` when clipped. Operates on
+/// chars so multi-byte text never splits mid-codepoint.
+fn truncate(s: &str, max: usize) -> String {
+    let s = s.trim();
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let kept: String = s.chars().take(max.saturating_sub(1)).collect();
+        format!("{kept}…")
+    }
 }
 
 /// Interactive posting picker for `apply` with no id. Returns the chosen
@@ -175,7 +255,20 @@ async fn pick_posting(conn: &DatabaseConnection) -> Result<Option<i32>> {
                 .score
                 .map(|s| format!("[{s:>2}]"))
                 .unwrap_or_else(|| "[ –]".to_string());
-            format!("{score} #{} {} — {}", p.id, p.title, company_name(c))
+            // Append the triage reason so the role is legible before drilling in.
+            // Kept on one line (FuzzySelect is line-per-item) and truncated so it
+            // also stays fuzzy-matchable without wrapping on typical terminals.
+            let reason = p
+                .score_reason
+                .as_deref()
+                .map(|r| format!("  ·  {}", truncate(r, 72)))
+                .unwrap_or_default();
+            format!(
+                "{score} #{} {} — {}{reason}",
+                p.id,
+                p.title,
+                company_name(c)
+            )
         })
         .collect();
     let selection = dialoguer::FuzzySelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
@@ -185,6 +278,123 @@ async fn pick_posting(conn: &DatabaseConnection) -> Result<Option<i32>> {
         .max_length(15)
         .interact_opt()?;
     Ok(selection.map(|i| rows[i].0.id))
+}
+
+/// What the user chose in the `confirm_apply` preview menu.
+enum ApplyChoice {
+    Apply,
+    Dismiss,
+    Cancel,
+}
+
+/// Preview a posting and ask what to do. Shows the summary up front and offers
+/// to dump the full description before deciding. Dismiss hides the posting from
+/// the digest and picker; escaping the menu counts as "cancel".
+fn confirm_apply(posting: &posting::Model, company: &Option<company::Model>) -> Result<ApplyChoice> {
+    print!("\n{}", report::summary(posting, company));
+    loop {
+        let choice = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+            .with_prompt("Apply to this posting?")
+            .items(&[
+                "Apply (record & open)",
+                "View full description",
+                "Dismiss (hide from digest)",
+                "Cancel",
+            ])
+            .default(0)
+            .interact_opt()?;
+        match choice {
+            Some(0) => return Ok(ApplyChoice::Apply),
+            Some(1) => {
+                // Page the JD so it opens at the top and scrolls, then drops back
+                // to this menu on quit. Fall back to a plain dump if no pager runs.
+                let detail = report::detail(posting, company);
+                if !page(&detail) {
+                    print!("\n{detail}\n");
+                }
+            }
+            Some(2) => return Ok(ApplyChoice::Dismiss),
+            _ => return Ok(ApplyChoice::Cancel), // Cancel, or Esc
+        }
+    }
+}
+
+/// Show `text` in a scrollable pager, starting at the top and returning to the
+/// caller when the user quits (`q`). Honors `$PAGER`, else `less -RF` (`-F` skips
+/// paging when the text fits one screen), else `more`. Returns false if no pager
+/// could be spawned or the text was piped to a non-terminal, so the caller can
+/// fall back to plain printing.
+fn page(text: &str) -> bool {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    if !std::io::stdout().is_terminal() {
+        return false;
+    }
+
+    // A user-set $PAGER may include arguments (e.g. "less -R"); split on
+    // whitespace. Default to `less -RF`, falling back to `more` if less is absent.
+    let candidates: Vec<Vec<String>> = match std::env::var("PAGER") {
+        Ok(p) if !p.trim().is_empty() => vec![p.split_whitespace().map(str::to_string).collect()],
+        _ => vec![
+            vec!["less".into(), "-RF".into()],
+            vec!["more".into()],
+        ],
+    };
+
+    for argv in candidates {
+        let (cmd, args) = argv.split_first().expect("candidate argv is non-empty");
+        let mut child = match Command::new(cmd).args(args).stdin(Stdio::piped()).spawn() {
+            Ok(c) => c,
+            Err(_) => continue, // pager not installed — try the next
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            // Ignore a broken pipe: the user may quit before the write finishes.
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        // Wait so we don't return to the menu until the pager exits.
+        let _ = child.wait();
+        return true;
+    }
+    false
+}
+
+async fn cmd_show(db_path: &str, posting_id: i32) -> Result<()> {
+    let conn = db::connect(db_path).await?;
+    let Some((posting, company)) = queries::posting_with_company(&conn, posting_id).await? else {
+        anyhow::bail!("no posting with id {posting_id} — check `jobpipe digest`");
+    };
+    print!("{}", report::detail(&posting, &company));
+    Ok(())
+}
+
+async fn cmd_dismiss(db_path: &str, posting_id: i32, undo: bool) -> Result<()> {
+    let conn = db::connect(db_path).await?;
+    if undo {
+        let Some(posting) = queries::set_dismissed(&conn, posting_id, None).await? else {
+            anyhow::bail!("no posting with id {posting_id} — check `jobpipe digest`");
+        };
+        println!("Restored #{posting_id} \"{}\" to the digest.", posting.title);
+        return Ok(());
+    }
+    let Some((posting, company)) = queries::posting_with_company(&conn, posting_id).await? else {
+        anyhow::bail!("no posting with id {posting_id} — check `jobpipe digest`");
+    };
+    dismiss_posting(&conn, &posting, &company).await
+}
+
+async fn cmd_untrack(db_path: &str, application_id: i32) -> Result<()> {
+    let conn = db::connect(db_path).await?;
+    let Some(app) = queries::delete_application(&conn, application_id).await? else {
+        anyhow::bail!("no application with id {application_id} — check `jobpipe track`");
+    };
+    // Best-effort title for the confirmation; the posting may have since closed.
+    let title = match queries::posting_with_company(&conn, app.posting_id).await? {
+        Some((p, _)) => p.title,
+        None => "(posting gone)".to_string(),
+    };
+    println!("Removed application #{application_id}: \"{title}\".");
+    Ok(())
 }
 
 fn applied_date(ts: &str) -> &str {
@@ -295,21 +505,44 @@ async fn cmd_followup(db_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Write the starter config files into the current directory. Used to bootstrap
+/// jobpipe without cloning the repo (e.g. under `nix run`).
+fn cmd_setup(force: bool) -> Result<()> {
+    write_starter("profile.toml", config::PROFILE_TEMPLATE_TOML, force)?;
+    write_starter("companies.toml", config::DEFAULT_COMPANIES_TOML, force)?;
+    println!("\nNext steps:");
+    println!("  1. Edit profile.toml to describe yourself (the comments explain each field).");
+    println!("  2. export ANTHROPIC_API_KEY=sk-ant-...   (needed only for `triage`).");
+    println!("  3. jobpipe init && jobpipe fetch && jobpipe triage && jobpipe digest");
+    Ok(())
+}
+
+/// Write `contents` to `name` in the cwd, unless it exists and `force` is false.
+fn write_starter(name: &str, contents: &str, force: bool) -> Result<()> {
+    let path = Path::new(name);
+    if path.exists() && !force {
+        println!("Kept existing {name} (use `jobpipe setup --force` to overwrite).");
+        return Ok(());
+    }
+    std::fs::write(path, contents).with_context(|| format!("writing {name}"))?;
+    println!("Wrote {name}.");
+    Ok(())
+}
+
 async fn cmd_init(db_path: &str, companies_path: &str) -> Result<()> {
     let conn = db::connect(db_path).await?;
     db::run_migrations(&conn).await?;
     info!("migrations applied at {db_path}");
 
+    // Prefer a companies.toml on disk; otherwise fall back to the built-in list
+    // so `init` works with no config files (e.g. `nix run ... -- init`).
     let path = Path::new(companies_path);
-    if !path.exists() {
-        warn!("{companies_path} not found — database initialized with no companies");
-        println!(
-            "Initialized {db_path}. No {companies_path} found; add one and re-run init to seed."
-        );
-        return Ok(());
-    }
-
-    let seeds = config::load_companies(path)?;
+    let seeds = if path.exists() {
+        config::load_companies(path)?
+    } else {
+        info!("{companies_path} not found — seeding from the built-in company list");
+        config::default_companies()?
+    };
     let inserted = queries::seed_companies(&conn, &seeds).await?;
     let total = queries::count_companies(&conn).await?;
     println!(
@@ -495,6 +728,7 @@ async fn cmd_triage(
     db_path: &str,
     limit: Option<u64>,
     dry_run: bool,
+    retriage: bool,
     profile_path: &str,
 ) -> Result<()> {
     let conn = db::connect(db_path).await?;
@@ -502,8 +736,13 @@ async fn cmd_triage(
     if !path.exists() {
         anyhow::bail!("{profile_path} not found — it holds the candidate profile for scoring");
     }
+    if retriage && !dry_run {
+        let n = db::queries::reset_triage(&conn).await?;
+        println!("Cleared scores on {n} open posting(s) for re-triage.");
+    }
     let profile_text = config::load_profile_text(path)?;
-    triage::run(&conn, limit, dry_run, &profile_text).await
+    let prefilter = config::load_prefilter(path)?;
+    triage::run(&conn, limit, dry_run, &profile_text, &prefilter).await
 }
 
 async fn cmd_digest(

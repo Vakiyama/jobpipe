@@ -1,4 +1,5 @@
 /target
+/result
 /.direnv
 /.pgdata
 /.pgsocket
@@ -7,3 +8,6 @@
 *.db-wal
 .env
 .env.local
+
+# Your personal profile — copy profile.example.toml to profile.toml and edit.
+profile.toml

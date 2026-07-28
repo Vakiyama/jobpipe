@@ -234,6 +234,22 @@ pub async fn untriaged_postings(
     Ok(q.all(db).await?)
 }
 
+/// Clear the triage result on all open (not closed, not dismissed) postings so a
+/// subsequent `triage` run re-scores them under the current rubric. Returns how
+/// many rows were reset. Used by `triage --retriage` after a gate/prompt change.
+pub async fn reset_triage(db: &DatabaseConnection) -> Result<u64> {
+    let res = Posting::update_many()
+        .col_expr(posting::Column::Score, Expr::value(Option::<i32>::None))
+        .col_expr(posting::Column::ScoreReason, Expr::value(Option::<String>::None))
+        .col_expr(posting::Column::Flags, Expr::value(Option::<String>::None))
+        .col_expr(posting::Column::TriagedAt, Expr::value(Option::<String>::None))
+        .filter(posting::Column::ClosedAt.is_null())
+        .filter(posting::Column::DismissedAt.is_null())
+        .exec(db)
+        .await?;
+    Ok(res.rows_affected)
+}
+
 /// Persist a triage result on a posting: score, one-line reason, JSON flags
 /// array, and the `triaged_at` stamp that removes it from future triage runs.
 pub async fn set_triage(
@@ -263,7 +279,9 @@ pub async fn open_postings(
     since: Option<&str>,
     min_score: Option<i32>,
 ) -> Result<Vec<(posting::Model, Option<company::Model>)>> {
-    let mut q = Posting::find().filter(posting::Column::ClosedAt.is_null());
+    let mut q = Posting::find()
+        .filter(posting::Column::ClosedAt.is_null())
+        .filter(posting::Column::DismissedAt.is_null());
     if let Some(s) = since {
         q = q.filter(posting::Column::FirstSeen.gte(s));
     }
@@ -292,6 +310,7 @@ pub async fn unapplied_open_postings(
         .await?;
     let mut q = Posting::find()
         .filter(posting::Column::ClosedAt.is_null())
+        .filter(posting::Column::DismissedAt.is_null())
         .filter(posting::Column::Id.is_not_in(applied));
     if let Some(m) = min_score {
         q = q.filter(posting::Column::Score.gte(m));
@@ -313,6 +332,22 @@ pub async fn posting_with_company(
     };
     let company = Company::find_by_id(p.company_id).one(db).await?;
     Ok(Some((p, company)))
+}
+
+/// Set or clear a posting's `dismissed_at` flag, hiding it from (or restoring it
+/// to) the digest and apply picker. Pass `Some(now)` to dismiss, `None` to undo.
+/// Returns the updated posting, or `None` if no such id existed.
+pub async fn set_dismissed(
+    db: &DatabaseConnection,
+    posting_id: i32,
+    when: Option<&str>,
+) -> Result<Option<posting::Model>> {
+    let Some(model) = Posting::find_by_id(posting_id).one(db).await? else {
+        return Ok(None);
+    };
+    let mut am: posting::ActiveModel = model.into();
+    am.dismissed_at = Set(when.map(str::to_string));
+    Ok(Some(am.update(db).await?))
 }
 
 /// Outcome of recording an application.
@@ -383,6 +418,19 @@ pub async fn list_applications(
         rows.push((a, posting, company));
     }
     Ok(rows)
+}
+
+/// Delete an application by id. Returns the deleted row (for a confirmation
+/// message), or `None` if no such id existed. The posting is left untouched.
+pub async fn delete_application(
+    db: &DatabaseConnection,
+    app_id: i32,
+) -> Result<Option<application::Model>> {
+    let Some(model) = Application::find_by_id(app_id).one(db).await? else {
+        return Ok(None);
+    };
+    Application::delete_by_id(app_id).exec(db).await?;
+    Ok(Some(model))
 }
 
 /// Move an application to a new stage, stamping `last_contact = now` (a logged

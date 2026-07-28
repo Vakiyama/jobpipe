@@ -21,7 +21,19 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Write starter profile.toml and companies.toml into the current directory.
+    ///
+    /// Run this first when using jobpipe without cloning the repo (e.g. via
+    /// `nix run`). Then edit profile.toml, set ANTHROPIC_API_KEY, and run `init`.
+    Setup {
+        /// Overwrite files that already exist.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Create the database, run migrations, and seed companies from companies.toml.
+    ///
+    /// If no companies.toml is present, seeds from the built-in default list.
     Init {
         /// Company seed file.
         #[arg(long, default_value = "companies.toml")]
@@ -52,6 +64,11 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
 
+        /// Clear existing scores on all open postings first, so they are re-scored
+        /// under the current rubric. Use after changing the triage gate/prompt.
+        #[arg(long)]
+        retriage: bool,
+
         /// Candidate profile file.
         #[arg(long, default_value = "profile.toml")]
         profile: String,
@@ -59,10 +76,34 @@ pub enum Command {
 
     /// Record an application against a posting and open its apply URL.
     ///
-    /// With no id, opens an interactive picker over the open postings.
+    /// With no id, opens an interactive picker over the open postings. On a
+    /// terminal it previews the role and asks to confirm (or view the full
+    /// description) before recording; `--yes` skips straight to recording.
     Apply {
         /// The posting id (from the digest). Omit to pick interactively.
         posting_id: Option<i32>,
+
+        /// Skip the preview/confirmation and record immediately.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Print a posting's full details, including the whole job description.
+    Show {
+        /// The posting id (from the digest or `track`).
+        posting_id: i32,
+    },
+
+    /// Hide a posting from the digest and apply picker (e.g. not a fit).
+    ///
+    /// Sets a flag distinct from the triage score, so the posting is preserved
+    /// and can be restored with `--undo`. Applying by id still works regardless.
+    Dismiss {
+        /// The posting id (from the digest).
+        posting_id: i32,
+        /// Restore a previously dismissed posting instead.
+        #[arg(long)]
+        undo: bool,
     },
 
     /// List open applications, optionally filtered to one stage.
@@ -70,6 +111,15 @@ pub enum Command {
         /// Show only this stage.
         #[arg(long, value_enum)]
         stage: Option<Stage>,
+    },
+
+    /// Remove a tracked application (e.g. one added by mistake).
+    ///
+    /// Deletes only the application record; the posting itself is untouched and
+    /// will reappear in the `apply` picker.
+    Untrack {
+        /// The application id (from `track`).
+        application_id: i32,
     },
 
     /// Move an application to a new stage.
