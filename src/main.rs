@@ -221,13 +221,31 @@ async fn dismiss_posting(
 
 /// Truncate to at most `max` characters, appending `…` when clipped. Operates on
 /// chars so multi-byte text never splits mid-codepoint.
+/// Collapse a string to a single truncated line. Any run of whitespace
+/// (including the newlines embedded in HN "who is hiring" titles) becomes one
+/// space, so callers rendering one physical row per item — e.g. FuzzySelect —
+/// never get a value that wraps or breaks across lines.
 fn truncate(s: &str, max: usize) -> String {
-    let s = s.trim();
+    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
     if s.chars().count() <= max {
-        s.to_string()
+        s
     } else {
         let kept: String = s.chars().take(max.saturating_sub(1)).collect();
         format!("{kept}…")
+    }
+}
+
+/// A posting row rendered into the skim picker. Carries the id so the chosen
+/// row maps straight back to a posting; `label` is the single-line text skim
+/// both displays and fuzzy-matches against.
+struct PostingItem {
+    id: i32,
+    label: String,
+}
+
+impl skim::SkimItem for PostingItem {
+    fn text(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(&self.label)
     }
 }
 
@@ -248,36 +266,52 @@ async fn pick_posting(conn: &DatabaseConnection) -> Result<Option<i32>> {
         );
         return Ok(None);
     }
-    let items: Vec<String> = rows
-        .iter()
-        .map(|(p, c)| {
-            let score = p
-                .score
-                .map(|s| format!("[{s:>2}]"))
-                .unwrap_or_else(|| "[ –]".to_string());
-            // Append the triage reason so the role is legible before drilling in.
-            // Kept on one line (FuzzySelect is line-per-item) and truncated so it
-            // also stays fuzzy-matchable without wrapping on typical terminals.
-            let reason = p
-                .score_reason
-                .as_deref()
-                .map(|r| format!("  ·  {}", truncate(r, 72)))
-                .unwrap_or_default();
-            format!(
-                "{score} #{} {} — {}{reason}",
-                p.id,
-                p.title,
-                company_name(c)
-            )
-        })
-        .collect();
-    let selection = dialoguer::FuzzySelect::with_theme(&dialoguer::theme::ColorfulTheme::default())
-        .with_prompt("Pick a posting to apply to (type to filter)")
-        .items(&items)
-        .default(0)
-        .max_length(15)
-        .interact_opt()?;
-    Ok(selection.map(|i| rows[i].0.id))
+    // Feed the postings to skim, which draws a flicker-free fuzzy picker (proper
+    // differential redraws, unlike dialoguer). `height = "15"` reserves a 15-row
+    // window at the *bottom* of the terminal — compact and inline — instead of
+    // taking over the whole screen or clinging to the top.
+    use skim::prelude::{unbounded, SkimItemReceiver, SkimItemSender};
+    let (tx, rx): (SkimItemSender, SkimItemReceiver) = unbounded();
+    for (p, c) in &rows {
+        let score = p
+            .score
+            .map(|s| format!("[{s:>2}]"))
+            .unwrap_or_else(|| "[ –]".to_string());
+        // Append the triage reason so the role is legible before drilling in.
+        let reason = p
+            .score_reason
+            .as_deref()
+            .map(|r| format!("  ·  {}", r.trim()))
+            .unwrap_or_default();
+        let line = format!("{score} #{} {} — {}{reason}", p.id, p.title, company_name(c));
+        // `truncate` flattens embedded newlines (HN "who is hiring" blobs) to a
+        // single line and bounds the length so fuzzy matching stays snappy; skim
+        // itself ellipsizes to the window width for display.
+        let label = truncate(&line, 200);
+        let item: std::sync::Arc<dyn skim::SkimItem> =
+            std::sync::Arc::new(PostingItem { id: p.id, label });
+        // Sender only errors if the receiver is gone, which can't happen here.
+        let _ = tx.send(vec![item]);
+    }
+    drop(tx);
+
+    let options = skim::prelude::SkimOptionsBuilder::default()
+        .height("15".to_string())
+        .prompt("apply to (type to filter) > ".to_string())
+        .multi(false)
+        .build()
+        .context("building interactive picker options")?;
+    let out = skim::Skim::run_with(options, Some(rx))
+        .map_err(|e| anyhow::anyhow!("interactive picker failed: {e}"))?;
+    if out.is_abort {
+        return Ok(None);
+    }
+    let id = out
+        .selected_items
+        .first()
+        .and_then(|it| it.item.as_any().downcast_ref::<PostingItem>())
+        .map(|pi| pi.id);
+    Ok(id)
 }
 
 /// What the user chose in the `confirm_apply` preview menu.

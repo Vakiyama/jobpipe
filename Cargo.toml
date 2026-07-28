@@ -1,6 +1,6 @@
 [package]
 name = "jobpipe"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Daily ranked digest of new job postings pulled from company ATS boards"
 license = "MIT"
@@ -27,3 +27,4 @@ regex = "1"
 dotenvy = "0.15"
 once_cell = "1"
 dialoguer = { version = "0.11", default-features = false, features = ["fuzzy-select"] }
+skim = { version = "5.6.1", default-features = false }
