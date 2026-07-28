@@ -64,8 +64,25 @@ async fn main() -> Result<()> {
             min_score,
             since,
             format,
-        } => cmd_digest(&cli.db, min_score, since.as_deref(), format).await,
+            out,
+        } => cmd_digest(&cli.db, min_score, since.as_deref(), format, out.as_deref()).await,
+        Command::Run {
+            min_score,
+            out,
+            profile,
+        } => cmd_run(&cli.db, min_score, out.as_deref(), &profile).await,
     }
+}
+
+/// fetch + triage + digest, for cron. Triage failure (e.g. a missing key or a
+/// transient API error) is logged but does not stop the digest from rendering
+/// what's already scored.
+async fn cmd_run(db_path: &str, min_score: i32, out: Option<&str>, profile: &str) -> Result<()> {
+    cmd_fetch(db_path, None).await?;
+    if let Err(e) = cmd_triage(db_path, None, false, profile).await {
+        warn!("triage step failed, continuing to digest: {e:#}");
+    }
+    cmd_digest(db_path, min_score, None, DigestFormat::Term, out).await
 }
 
 /// Best-effort open of a URL in the user's browser. Never fails the command —
@@ -461,6 +478,7 @@ async fn cmd_digest(
     min_score: i32,
     since: Option<&str>,
     format: DigestFormat,
+    out: Option<&str>,
 ) -> Result<()> {
     let conn = db::connect(db_path).await?;
     let cutoff = match since {
@@ -468,11 +486,19 @@ async fn cmd_digest(
         None => None,
     };
     let rows = queries::open_postings(&conn, cutoff.as_deref(), Some(min_score)).await?;
-    let format = match format {
-        DigestFormat::Term => report::Format::Term,
-        DigestFormat::Md => report::Format::Md,
-    };
-    print!("{}", report::render(&rows, format));
+
+    // A file report is always markdown; stdout honors --format.
+    if let Some(path) = out {
+        let md = report::render(&rows, report::Format::Md);
+        std::fs::write(path, md).with_context(|| format!("writing digest to {path}"))?;
+        println!("Wrote {} posting(s) to {path}.", rows.len());
+    } else {
+        let format = match format {
+            DigestFormat::Term => report::Format::Term,
+            DigestFormat::Md => report::Format::Md,
+        };
+        print!("{}", report::render(&rows, format));
+    }
     Ok(())
 }
 

@@ -60,7 +60,7 @@ fn infer_remote(location: Option<&str>) -> String {
 /// plain text. Entities are decoded first so entity-escaped markup (Greenhouse
 /// serves `&lt;p&gt;`) and real markup (the other boards) both reduce to tags
 /// that the stripper then removes.
-fn clean_html(input: &str) -> String {
+pub(crate) fn clean_html(input: &str) -> String {
     let decoded = html_escape::decode_html_entities(input);
     let mut out = String::with_capacity(decoded.len());
     let mut in_tag = false;

@@ -93,6 +93,25 @@ pub enum Command {
         /// Output format.
         #[arg(long, value_enum, default_value_t = DigestFormat::Term)]
         format: DigestFormat,
+
+        /// Write the digest as markdown to this file instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
+
+    /// fetch + triage + digest in one shot, for a cron job.
+    Run {
+        /// Digest threshold.
+        #[arg(long, default_value_t = 7)]
+        min_score: i32,
+
+        /// Write the markdown digest to this file (otherwise printed).
+        #[arg(long)]
+        out: Option<String>,
+
+        /// Candidate profile file for triage.
+        #[arg(long, default_value = "profile.toml")]
+        profile: String,
     },
 }
 

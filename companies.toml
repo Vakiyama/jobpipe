@@ -291,3 +291,22 @@ name = "Personio"
 ats = "recruitee"
 slug = "personio"
 tags = "fullstack, eu"
+
+# ---- Secondary sources (aggregators; slug is ignored) ----
+# High volume — these pull remote roles across many companies, so they add the
+# most triage cost. Set active=0 in the DB or delete a row to disable one.
+[[companies]]
+name = "HN Who is Hiring"
+ats = "hn-whoishiring"
+slug = "_"
+tags = "aggregator, hn, rust, remote"
+[[companies]]
+name = "RemoteOK"
+ats = "remoteok"
+slug = "_"
+tags = "aggregator, remote"
+[[companies]]
+name = "Remotive"
+ats = "remotive"
+slug = "_"
+tags = "aggregator, remote"

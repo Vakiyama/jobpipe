@@ -3,8 +3,11 @@
 
 pub mod ashby;
 pub mod greenhouse;
+pub mod hn;
 pub mod lever;
 pub mod recruitee;
+pub mod remoteok;
+pub mod remotive;
 pub mod workable;
 
 use async_trait::async_trait;
@@ -74,6 +77,9 @@ pub fn source_for(ats: &str, client: &Client) -> Option<Box<dyn JobSource>> {
         "ashby" => Some(Box::new(ashby::Ashby::new(client.clone()))),
         "workable" => Some(Box::new(workable::Workable::new(client.clone()))),
         "recruitee" => Some(Box::new(recruitee::Recruitee::new(client.clone()))),
+        "remoteok" => Some(Box::new(remoteok::RemoteOk::new(client.clone()))),
+        "remotive" => Some(Box::new(remotive::Remotive::new(client.clone()))),
+        "hn-whoishiring" => Some(Box::new(hn::HnWhoIsHiring::new(client.clone()))),
         _ => None,
     }
 }
