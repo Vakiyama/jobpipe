@@ -1,6 +1,6 @@
 [package]
 name = "jobpipe"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 description = "Daily ranked digest of new job postings pulled from company ATS boards"
 license = "MIT"

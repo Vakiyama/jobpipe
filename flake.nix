@@ -30,7 +30,7 @@
           };
           jobpipe = rustPlatform.buildRustPackage {
             pname = "jobpipe";
-            version = "1.0.0";
+            version = "1.0.2";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
             # libsqlite3-sys links SQLite; reqwest uses rustls (no OpenSSL needed).
@@ -63,6 +63,13 @@
             "rust-src"
             "rust-analyzer"
           ];
+          # `jobpipe ...` in the dev shell runs the optimized (release) build,
+          # rebuilding incrementally only when the source changed. cargo finds the
+          # manifest by searching up from the current directory, so this works
+          # anywhere inside the project tree.
+          jobpipe-dev = pkgs.writeShellScriptBin "jobpipe" ''
+            exec cargo run --release --quiet -- "$@"
+          '';
         in
         {
           default = pkgs.mkShell {
@@ -71,6 +78,7 @@
               sqlite
               pkg-config
               git
+              jobpipe-dev
             ];
 
             RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";

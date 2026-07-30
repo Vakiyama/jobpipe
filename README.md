@@ -80,6 +80,14 @@ For a dev shell with the full Rust toolchain (rustc, cargo, clippy, rust-analyze
 nix develop
 ```
 
+Inside the dev shell, `jobpipe` is on your `PATH` as a wrapper that runs the
+**optimized release build** (`cargo run --release`), rebuilding incrementally only
+when the source changes. So you can just type `jobpipe fetch`, `jobpipe digest`,
+etc. instead of `cargo run`. (Using [direnv](https://direnv.net/)? The repo ships an
+`.envrc` with `use flake`, so the dev shell — and the `jobpipe` command — load
+automatically when you `cd` in; run `direnv reload` after pulling changes to the
+flake.)
+
 ### With Cargo
 
 ```sh
