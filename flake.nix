@@ -30,7 +30,7 @@
           };
           jobpipe = rustPlatform.buildRustPackage {
             pname = "jobpipe";
-            version = "1.0.2";
+            version = "1.0.3";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
             # libsqlite3-sys links SQLite; reqwest uses rustls (no OpenSSL needed).
