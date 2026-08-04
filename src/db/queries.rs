@@ -250,6 +250,36 @@ pub async fn reset_triage(db: &DatabaseConnection) -> Result<u64> {
     Ok(res.rows_affected)
 }
 
+/// Persist one identical triage result across many postings in a single UPDATE.
+/// Used by the code-side pre-filter, where every rejected posting gets the same
+/// score/reason/flags — collapsing thousands of one-row writes (each an fsync'd
+/// transaction) into one statement. Returns rows affected. A no-op on an empty id
+/// slice. `ids` is chunked to stay well under SQLite's bound-parameter limit.
+pub async fn set_triage_bulk(
+    db: &DatabaseConnection,
+    ids: &[i32],
+    score: i32,
+    reason: &str,
+    flags_json: &str,
+    now: &str,
+) -> Result<u64> {
+    // SQLite caps host parameters (default 32766); stay comfortably below it.
+    const CHUNK: usize = 500;
+    let mut affected = 0u64;
+    for chunk in ids.chunks(CHUNK) {
+        let res = Posting::update_many()
+            .col_expr(posting::Column::Score, Expr::value(score))
+            .col_expr(posting::Column::ScoreReason, Expr::value(reason))
+            .col_expr(posting::Column::Flags, Expr::value(flags_json))
+            .col_expr(posting::Column::TriagedAt, Expr::value(now))
+            .filter(posting::Column::Id.is_in(chunk.iter().copied()))
+            .exec(db)
+            .await?;
+        affected += res.rows_affected;
+    }
+    Ok(affected)
+}
+
 /// Persist a triage result on a posting: score, one-line reason, JSON flags
 /// array, and the `triaged_at` stamp that removes it from future triage runs.
 pub async fn set_triage(

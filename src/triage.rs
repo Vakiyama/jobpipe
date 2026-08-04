@@ -215,19 +215,22 @@ pub async fn run(
     }
 
     // Persist the code-side rejects without spending — score 0, never re-sent.
+    // One bulk UPDATE, not a write per row: on a large re-triage this is thousands
+    // of postings, and per-row writes each fsync, which otherwise stalls the run
+    // silently for minutes before the first LLM batch.
     let now = Utc::now().to_rfc3339();
-    for p in &rejects {
-        queries::set_triage(
+    if !rejects.is_empty() {
+        let ids: Vec<i32> = rejects.iter().map(|p| p.id).collect();
+        println!("Pre-filtering {} posting(s) by title (no API cost)…", ids.len());
+        queries::set_triage_bulk(
             db,
-            p.id,
+            &ids,
             0,
             "pre-filtered: title matched obvious-reject pattern",
             "[\"prefilter_reject\"]",
             &now,
         )
         .await?;
-    }
-    if !rejects.is_empty() {
         info!(
             count = rejects.len(),
             "pre-filtered postings marked score 0"
