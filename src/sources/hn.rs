@@ -68,11 +68,18 @@ async fn get_json<T: for<'de> Deserialize<'de>>(
 /// A ~110-char single-line title from the comment's first line of text.
 fn derive_title(html: &str) -> String {
     let text = normalize::clean_html(html);
-    let first_line = text.split('|').next().unwrap_or(&text).trim();
-    let base = if first_line.len() >= 15 {
-        first_line
+    // Only the first non-empty line is title material; the rest is the job
+    // description and must never leak in, or the title wraps across several rows
+    // in `track` / the apply picker.
+    let first_line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+    // HN posts usually lead "Company | Location | Role | …"; the piece before the
+    // first pipe reads best as a title, but fall back to the whole first line
+    // when that piece is too short to stand on its own.
+    let head = first_line.split('|').next().unwrap_or(first_line).trim();
+    let base = if head.chars().count() >= 15 {
+        head
     } else {
-        &text
+        first_line
     };
     let mut title: String = base.chars().take(110).collect();
     if base.chars().count() > 110 {
@@ -130,5 +137,33 @@ impl JobSource for HnWhoIsHiring {
             })
             .collect();
         Ok(postings)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::derive_title;
+
+    #[test]
+    fn substantial_pipe_head_stands_alone_as_the_title() {
+        let html = "<p>Fastly Edge Cloud | San Francisco | Senior Rust Engineer | Remote</p>\
+                    <p>We build a global edge network. Apply within.</p>";
+        assert_eq!(derive_title(html), "Fastly Edge Cloud");
+    }
+
+    #[test]
+    fn short_head_falls_back_to_the_whole_first_line_not_the_body() {
+        // "Acme" alone is uninformative, so keep the rest of the first line —
+        // but never spill into the second paragraph (that's the description).
+        let html = "<p>Acme | Berlin | Backend Engineer (Go)</p>\
+                    <p>Series B. We ship daily and pay well.</p>";
+        assert_eq!(derive_title(html), "Acme | Berlin | Backend Engineer (Go)");
+    }
+
+    #[test]
+    fn title_never_spans_multiple_lines() {
+        let html = "<p>Widgets Inc — we are hiring</p>\
+                    <p>Location: remote</p><p>Role: platform</p>";
+        assert!(!derive_title(html).contains('\n'));
     }
 }

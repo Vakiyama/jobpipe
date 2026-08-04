@@ -30,12 +30,20 @@ pub fn normalize(raw: RawPosting) -> NormalizedPosting {
         .unwrap_or_else(|| infer_remote(location.as_deref()));
     NormalizedPosting {
         external_id: raw.external_id,
-        title: raw.title.trim().to_string(),
+        title: single_line(&raw.title),
         location,
         remote,
         description: clean_html(&raw.description),
         apply_url: raw.apply_url,
     }
+}
+
+/// Collapse every run of whitespace (newlines included) into a single space so a
+/// title always renders on one line. HN "who is hiring" comments — and the odd
+/// ATS — carry embedded line breaks that otherwise wrap the digest, `track`, and
+/// apply output across several rows.
+fn single_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Coarse remote classification from a location string. Phase 1 keeps this cheap;
@@ -159,7 +167,21 @@ fn push_block(segments: &mut Vec<(Block, String)>, kind: Block, buf: &mut String
 
 #[cfg(test)]
 mod tests {
-    use super::clean_html;
+    use super::{clean_html, normalize};
+    use crate::sources::RawPosting;
+
+    #[test]
+    fn title_is_flattened_to_a_single_line() {
+        let raw = RawPosting {
+            external_id: "1".into(),
+            title: "Acme Corp\n\nHiring Rust\nengineers".into(),
+            location: None,
+            description: String::new(),
+            apply_url: "https://example.com".into(),
+            remote: None,
+        };
+        assert_eq!(normalize(raw).title, "Acme Corp Hiring Rust engineers");
+    }
 
     #[test]
     fn paragraphs_get_a_blank_line_and_br_stays_within_the_block() {
