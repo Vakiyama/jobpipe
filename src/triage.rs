@@ -31,6 +31,17 @@ const MAX_TOKENS: u32 = 4096;
 /// Descriptions are truncated before they hit the prompt to bound token spend.
 const DESC_LIMIT: usize = 1200;
 
+/// The rubric caps any posting whose location fails the hard gate at this score.
+/// The model is told to do this itself, but a fast model applies it inconsistently
+/// (it will emit a location-failure flag and still return an 8), so we re-apply the
+/// cap deterministically from its own flags — see [`enforce_location_gate`].
+const LOCATION_FAIL_CAP: i32 = 3;
+
+/// Flags the model emits when a posting's location fails the hard gate. Their
+/// presence is the model's own signal that the rubric's location cap must hold,
+/// regardless of the raw score it returned alongside them.
+const LOCATION_FAIL_FLAGS: [&str; 2] = ["no_location", "hybrid_offsite"];
+
 // claude-haiku-4-5 pricing, USD per million tokens. Update if Anthropic changes
 // rates. Cache writes bill at 1.25x input (5-minute TTL); cache reads at ~0.1x.
 const PRICE_INPUT_PER_MTOK: f64 = 1.00;
@@ -299,12 +310,29 @@ async fn apply_scores(
             warn!(external_id = %p.external_id, "no score returned for posting");
             continue;
         };
-        let score = r.score.clamp(0, 10) as i32;
+        let raw = r.score.clamp(0, 10) as i32;
+        let (score, reason) = enforce_location_gate(raw, &r.reason, &r.flags);
         let flags_json = serde_json::to_string(&r.flags).unwrap_or_else(|_| "[]".to_string());
-        queries::set_triage(db, p.id, score, &r.reason, &flags_json, now).await?;
+        queries::set_triage(db, p.id, score, &reason, &flags_json, now).await?;
         n += 1;
     }
     Ok(n)
+}
+
+/// Enforce the rubric's hard location cap from the model's own flags. A fast model
+/// frequently emits a location-failure flag (`no_location` / `hybrid_offsite`) yet
+/// still returns a high score for the stack — this re-applies the cap so those
+/// postings can't surface in the digest. Returns the (possibly lowered) score and
+/// its reason, prefixed to make the code-side cap visible in `show` / the digest.
+fn enforce_location_gate(score: i32, reason: &str, flags: &[String]) -> (i32, String) {
+    let location_failed = flags
+        .iter()
+        .any(|f| LOCATION_FAIL_FLAGS.contains(&f.as_str()));
+    if location_failed && score > LOCATION_FAIL_CAP {
+        (LOCATION_FAIL_CAP, format!("[location gate] {reason}"))
+    } else {
+        (score, reason.to_string())
+    }
 }
 
 /// Score one batch via the Messages API. Returns the parsed per-posting results
@@ -401,11 +429,21 @@ the `acceptable` arrangements — generally at least one of:
   - Fully remote that explicitly includes their `work_authorization` region (e.g. a multi-region
     remote role that names it).
 
-HYBRID IS NOT REMOTE. "Hybrid" means mandatory in-office days at a specific office, so a hybrid
-role is workable ONLY when that office is in the candidate's `base` metro. A hybrid role tied to
-any other city — even another city inside their work-authorization country — is NOT workable,
-because the candidate cannot commute there. Being in the right country does NOT rescue a hybrid
-role; only a base-metro hybrid or a fully-remote role in the authorized region qualifies.
+HYBRID AND ONSITE ARE NOT REMOTE. "Hybrid" means mandatory in-office days and "onsite" means
+full-time in-office, both at a specific office — so a hybrid OR onsite role is workable ONLY when
+that office is in the candidate's `base` metro. A hybrid/onsite role tied to any other city is NOT
+workable, because the candidate cannot commute there. This is the single most common mistake to
+avoid: being in the SAME COUNTRY does NOT rescue a hybrid/onsite role. A hybrid or onsite office in
+another city of the work-authorization country (for a Vancouver-based candidate: Toronto, Montreal,
+Ottawa, Waterloo, etc.) FAILS the gate exactly like a foreign office does. "Canada remote" in the
+`acceptable` list means fully-remote-anywhere-in-Canada; it does NOT mean "any office located in
+Canada". Only a base-metro office or a fully-remote role in the authorized region qualifies.
+
+When a posting lists SEVERAL cities with a hybrid/onsite arrangement (e.g. "San Francisco | Toronto
+| New York | Montreal", hybrid), the candidate would have to be in ONE of those offices — none of
+which is the base metro — so it FAILS the gate. Do not pass it just because one listed city is in
+the authorized country. It passes ONLY if one listed option is the base metro, or one option is
+genuine full remote covering the authorized region.
 
 A location is NOT workable if the only options are: onsite or hybrid outside the `base` metro,
 remote restricted to a region that excludes the candidate's `work_authorization`, or any country
@@ -413,9 +451,12 @@ where the candidate is not authorized to work — even when the role is otherwis
 
 If a posting lists several locations and ANY one is workable, treat it as workable and score
 normally. If NONE is workable, you MUST cap the score at 3 and add the "no_location" flag (and, for
-a hybrid role tied to an offsite metro, also the "hybrid_offsite" flag) — no matter how strong the
-stack, seniority, or role fit is. Only when the location is genuinely unstated should you skip the
-cap and score on the other axes.
+a hybrid or onsite role tied to an offsite metro, also the "hybrid_offsite" flag) — no matter how
+strong the stack, seniority, or role fit is. Emitting the "no_location" flag whenever the location
+fails is MANDATORY and non-optional: it is the machine-readable signal that the cap applies, and a
+downstream check re-enforces the cap from it, so a failed location with a high score and no flag is
+a contradiction you must never produce. Only when the location is genuinely unstated should you skip
+the cap and score on the other axes.
 
 Scoring rubric (0-10), applied only after a posting passes the location gate. Judge fit from the
 profile's `[preferences]` (`priority` is the highest-value target, `also_strong` is a genuine
@@ -426,7 +467,13 @@ second specialty, `avoid` lists dealbreakers), `[skills]`, and the candidate's s
   wanting commercial experience the profile shows the candidate already has.
 - 7-8: A strong match on the candidate's core `[skills]` within their seniority band, or a role in
   their `also_strong` secondary specialty. (Location is already confirmed workable by the gate.)
-- 4-6: Plausible but mismatched on one axis (slightly senior, adjacent stack).
+  `also_strong` is a SPECIFIC stack (for this candidate, Rust systems work) — not "any backend or
+  infrastructure role". A role whose primary language is one the candidate does not work in
+  (e.g. Python, Go, Scala, Java — anything absent from `[skills].languages`) is NOT an `also_strong`
+  match just because it is backend/infra/platform work; treat a primary language the candidate lacks
+  as a stack mismatch, not a strength.
+- 4-6: Plausible but mismatched on one axis (slightly senior, adjacent stack, or a backend role in a
+  language the candidate does not use but could plausibly pick up).
 - 0-3: Wrong discipline, wrong seniority by 5+ years, hits an `avoid` dealbreaker the candidate
   cannot satisfy (e.g. clearance or citizenship they lack), or location failed the gate above.
 
@@ -452,4 +499,43 @@ fn user_message(batch: &[posting::Model]) -> String {
         ));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{enforce_location_gate, LOCATION_FAIL_CAP};
+
+    fn flags(fs: &[&str]) -> Vec<String> {
+        fs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_location_flag_forces_the_cap_even_on_a_high_score() {
+        let (score, reason) = enforce_location_gate(8, "great AI fit", &flags(&["no_location"]));
+        assert_eq!(score, LOCATION_FAIL_CAP);
+        assert!(reason.starts_with("[location gate]"));
+    }
+
+    #[test]
+    fn hybrid_offsite_flag_also_forces_the_cap() {
+        let (score, _) =
+            enforce_location_gate(9, "Toronto hybrid", &flags(&["priority_stack", "hybrid_offsite"]));
+        assert_eq!(score, LOCATION_FAIL_CAP);
+    }
+
+    #[test]
+    fn a_workable_posting_is_left_untouched() {
+        let (score, reason) =
+            enforce_location_gate(9, "Vancouver, priority stack", &flags(&["priority_stack"]));
+        assert_eq!(score, 9);
+        assert_eq!(reason, "Vancouver, priority stack");
+    }
+
+    #[test]
+    fn an_already_capped_score_keeps_its_original_reason() {
+        // The flag is present but the score already honours the cap — don't relabel.
+        let (score, reason) = enforce_location_gate(2, "SF onsite", &flags(&["no_location"]));
+        assert_eq!(score, 2);
+        assert_eq!(reason, "SF onsite");
+    }
 }
