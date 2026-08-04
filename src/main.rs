@@ -283,7 +283,12 @@ async fn pick_posting(conn: &DatabaseConnection) -> Result<Option<i32>> {
             .as_deref()
             .map(|r| format!("  ·  {}", r.trim()))
             .unwrap_or_default();
-        let line = format!("{score} #{} {} — {}{reason}", p.id, p.title, company_name(c));
+        let line = format!(
+            "{score} #{} {} — {}{reason}",
+            p.id,
+            p.title,
+            company_name(c)
+        );
         // `truncate` flattens embedded newlines (HN "who is hiring" blobs) to a
         // single line and bounds the length so fuzzy matching stays snappy; skim
         // itself ellipsizes to the window width for display.
@@ -324,7 +329,10 @@ enum ApplyChoice {
 /// Preview a posting and ask what to do. Shows the summary up front and offers
 /// to dump the full description before deciding. Dismiss hides the posting from
 /// the digest and picker; escaping the menu counts as "cancel".
-fn confirm_apply(posting: &posting::Model, company: &Option<company::Model>) -> Result<ApplyChoice> {
+fn confirm_apply(
+    posting: &posting::Model,
+    company: &Option<company::Model>,
+) -> Result<ApplyChoice> {
     print!("\n{}", report::summary(posting, company));
     loop {
         let choice = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
@@ -370,10 +378,7 @@ fn page(text: &str) -> bool {
     // whitespace. Default to `less -RF`, falling back to `more` if less is absent.
     let candidates: Vec<Vec<String>> = match std::env::var("PAGER") {
         Ok(p) if !p.trim().is_empty() => vec![p.split_whitespace().map(str::to_string).collect()],
-        _ => vec![
-            vec!["less".into(), "-RF".into()],
-            vec!["more".into()],
-        ],
+        _ => vec![vec!["less".into(), "-RF".into()], vec!["more".into()]],
     };
 
     for argv in candidates {
@@ -408,7 +413,10 @@ async fn cmd_dismiss(db_path: &str, posting_id: i32, undo: bool) -> Result<()> {
         let Some(posting) = queries::set_dismissed(&conn, posting_id, None).await? else {
             anyhow::bail!("no posting with id {posting_id} — check `jobpipe digest`");
         };
-        println!("Restored #{posting_id} \"{}\" to the digest.", posting.title);
+        println!(
+            "Restored #{posting_id} \"{}\" to the digest.",
+            posting.title
+        );
         return Ok(());
     }
     let Some((posting, company)) = queries::posting_with_company(&conn, posting_id).await? else {
@@ -508,7 +516,7 @@ async fn cmd_followup(db_path: &str) -> Result<()> {
                 Some(d) if d >= 21 => Some(format!(
                     "{d}d since applied, no response — consider marking ghosted"
                 )),
-                Some(d) if d >= 7 => Some(format!(
+                Some(d) if d >= 14 => Some(format!(
                     "{d}d since applied, no response — send a follow-up email"
                 )),
                 _ => None,

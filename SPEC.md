@@ -14,8 +14,8 @@ The operator is a full-stack engineer doing an active job search. Current proces
 browse LinkedIn daily, eyeball postings for fit, apply. This costs ~1–2 hours/day and has
 poor recall — good roles at smaller companies never surface.
 
-The bottleneck is **discovery and triage**, not application volume. The operator's interview
-rate is already ~10% per application, which is high. Automating submission would degrade
+The bottleneck is **discovery and triage**, not application volume. The operator already
+converts applications to interviews at a healthy rate; automating submission would degrade
 that. Do not build an auto-applier.
 
 Target end state: one command (or one cron job) produces a ranked list of 5–15 new,
@@ -135,7 +135,7 @@ CREATE TABLE companies (
   ats           TEXT NOT NULL,          -- greenhouse | lever | ashby | ...
   slug          TEXT NOT NULL,
   careers_url   TEXT,
-  tags          TEXT,                   -- csv: vancouver, rust, remote-ca, ...
+  tags          TEXT,                   -- csv freeform labels: backend, remote, fintech, ...
   active        INTEGER NOT NULL DEFAULT 1,
   needs_review  INTEGER NOT NULL DEFAULT 0,
   last_fetched  TEXT,
@@ -196,114 +196,46 @@ Per posting, return:
   "external_id": "...",
   "score": 0,
   "reason": "one sentence, max 20 words",
-  "flags": ["requires_citizenship", "senior_only", "rust", "no_canada", "contract"]
+  "flags": ["requires_citizenship", "senior_only", "priority_stack", "no_location", "contract"]
 }
 ```
 
-Scoring rubric to embed in the prompt:
+A hard location gate is applied first — see the profile's `[location]` block. If none of a
+posting's locations are workable, the score is capped at 3 regardless of stack fit.
 
-- **9–10** — Rust role at or near this experience level, or a backend/full-stack role that
-  explicitly mentions Rust in the stack. Note the candidate has *production* Rust (a shipped,
-  in-use system), not just side projects — do not down-rank Rust roles for lack of commercial
-  experience.
-- **7–8** — Strong TS/React/Node full-stack or frontend role in the 2–5 YOE band with workable
-  location; or an AI/LLM application-engineering role (agent orchestration, tool use, LLM API
-  integration), which is a genuine second specialty here.
+Scoring rubric to embed in the prompt, judged against the profile's `[preferences]` (`priority`
+= highest-value target, `also_strong` = a genuine second specialty, `avoid` = dealbreakers),
+`[skills]`, and seniority (`seniority_band`, `years_experience`):
+
+- **9–10** — A role squarely in the candidate's `priority` area at or near their experience
+  level, or one that explicitly names their `priority` stack.
+- **7–8** — A strong match on the candidate's core `[skills]` within their seniority band, or a
+  role in their `also_strong` secondary specialty.
 - **4–6** — Plausible but mismatched on one axis (slightly senior, adjacent stack, unclear location).
-- **0–3** — Wrong discipline, wrong seniority by 5+ years, requires clearance/citizenship the
-  candidate doesn't have, or location is not workable.
+- **0–3** — Wrong discipline, wrong seniority by 5+ years, hits an `avoid` dealbreaker the
+  candidate cannot satisfy, or location failed the gate.
 
 Hard filters applied in code *before* the LLM call, to save spend: drop postings whose title
-matches an obvious-reject regex (`Senior Staff|Principal|Director|VP |Manager|Intern|
-Recruiter|Sales|Marketing`) unless the description mentions Rust.
+matches the configured obvious-reject regex (`[prefilter].reject_titles`) unless the description
+mentions a keep-keyword (`[prefilter].keep_keywords`, typically the candidate's priority stack).
 
 Digest threshold: show score ≥ 7 by default, `--min-score` to override.
 
 ### 7.1 Candidate profile
 
-Store this in `profile.toml`, loaded into the triage prompt.
+The candidate profile lives in `profile.toml`; see `profile.example.toml` for the full schema
+and per-field documentation. `profile.toml` is gitignored — only the example is committed.
 
-```toml
-[candidate]
-positioning = "Full-stack engineer shipping production AI systems and real-time infrastructure — TypeScript and Rust"
-years_experience = 3.5
-seniority_band = "mid"   # 2-5 YOE postings are the sweet spot; not junior, not senior
-titles = [
-  "Software Engineer", "Full Stack Engineer", "Backend Engineer",
-  "Frontend Engineer", "Product Engineer", "Founding Engineer",
-]
-education = "BCIT Full Stack Web Development Diploma, Sep 2023 - Apr 2025"
+The entire file is passed verbatim into the triage prompt, so the model scores postings against
+exactly what it contains. The structure is free-form except for three load-bearing sections
+whose field names the scoring prompt references directly:
 
-[skills]
-languages   = ["TypeScript", "JavaScript", "Rust", "SQL", "Gleam", "C#"]
-ai_llm      = ["Anthropic API", "MCP", "AWS Bedrock SDK", "agent tool-use orchestration"]
-frameworks  = ["React", "React Native", "Next.js", "Node.js", "Bun", "Hono",
-               "TanStack Query", "SolidJS", "TailwindCSS"]
-infra       = ["AWS", "Docker", "PostgreSQL", "Redis", "Railway", "GitHub Actions", "Nix", "Git"]
-libraries   = ["tRPC", "Drizzle", "SeaORM", "EffectTS", "Zod", "Playwright", "Jest", "tokio"]
-rust_depth  = ["tokio", "tonic/gRPC", "SeaORM", "WebRTC / custom SFU", "MLS", "Iced", "OpenTofu"]
+- `[location]` — `base`, `acceptable`, `work_authorization` drive the hard location gate.
+- `[preferences]` — `priority`, `also_strong`, `avoid` drive the scoring rubric (section 7).
+- `[prefilter]` (optional) — `reject_titles`, `keep_keywords` configure the code-side pre-filter.
 
-[experience.contract]
-title = "Software Engineer, Contract (Independent, Remote)"
-dates = "May 2026 - Present"
-summary = """
-Shipped a production incident-reporting system for a manufacturing client in under two months,
-in Rust: WhatsApp Business API integration using the Anthropic API to turn unstructured
-shop-floor reports into structured incident records, with automated PDF generation,
-SeaORM/PostgreSQL persistence, and full pt-BR localization. Live and in daily use.
-Also stabilized a client's AWS ECS Fargate deployment pipeline and delivered React feature
-work on a Django franchise management platform.
-"""
-
-[experience.arkhet]
-title = "Founding Software Engineer, Arkhet (Vancouver, BC)"
-dates = "Sep 2024 - May 2026"
-summary = """
-Primary architect of the full-stack platform — backend AI prototype generation, canvas
-infrastructure, and all major technical decisions from inception to first paying customers in
-8 months. Led 2 engineers through MVP in 3 months; migrated the stack to Hono + tRPC +
-TanStack Query. Rewrote a 5,000-line imperative React canvas as a 2,500-line functional MVU
-architecture in Gleam (95% fewer canvas bugs, 10x interaction performance), then extended it
-with CRDT multiplayer editing over WebSockets coordinated via Redis. Established QA and CI
-from zero.
-"""
-
-[experience.dmf]
-title = "Frontend Developer, Discover My Franchise (Vancouver, BC)"
-dates = "Feb 2023 - Aug 2024"
-summary = """
-Built a local-first React Native messaging app (Android + iOS) with offline sync via
-WatermelonDB, serving staff across 5 franchises. Led an incremental TypeScript migration of a
-5+ year React codebase. Built the platform's first component library (Storybook + Tailwind).
-"""
-
-[projects.chat_rs]
-stack = ["Rust", "Iced", "tonic/gRPC", "WebRTC", "MLS", "SeaORM", "PostgreSQL", "OpenTofu"]
-summary = """
-Native Rust desktop voice and chat app on a custom WebRTC SFU — multi-party audio routing,
-renegotiation glare prevention, SSRC-keyed mixing, E2E encryption via MLS. Built the real-time
-audio pipeline (echo cancellation, noise suppression, AGC), including an upstream patch to a
-third-party adaptive FIR filter crate fixing a panic under load.
-"""
-
-[projects.harmony]
-stack = ["SolidJS", "SolidStart", "Anthropic API", "EffectTS", "TailwindCSS"]
-summary = """
-Full-stack AI agent platform for senior care using the Anthropic API — autonomous tool use
-across scheduling, journaling, and patient record retrieval, with speech-to-text input and TTS
-responses; tool-call failures modelled as typed errors in EffectTS for reliable agent recovery.
-"""
-
-[location]
-base = "Vancouver, BC, Canada"
-acceptable = ["Vancouver / Greater Vancouver", "Canada remote", "US remote (hires in Canada)"]
-work_authorization = "Canada"
-
-[preferences]
-priority = "Rust roles rank highest even at a weaker title match"
-also_strong = "AI/LLM application engineering — agent orchestration, tool use, Anthropic API"
-avoid = ["equity-only", "commission-based", "clearance-required", "US-only work authorization"]
-```
+Everything else (`[candidate]`, `[skills]`, `[experience.*]`, `[projects.*]`) is free-form
+context that helps the model judge fit.
 
 ---
 
