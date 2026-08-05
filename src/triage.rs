@@ -8,6 +8,7 @@
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
+use futures::stream::{self, StreamExt};
 use regex::Regex;
 use reqwest::Client;
 use sea_orm::DatabaseConnection;
@@ -27,6 +28,11 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 const MODEL: &str = "claude-haiku-4-5";
 /// Postings per API request (spec: batch 10-20 to keep cost down).
 const BATCH_SIZE: usize = 15;
+/// Batches scored concurrently. The scoring calls are network-bound, so running
+/// several in flight turns a long sequential run into a short one; DB writes are
+/// still applied serially on the main task to avoid SQLite writer contention. The
+/// first batch is sent alone to warm the prompt cache before this wave (see `run`).
+const SCORE_CONCURRENCY: usize = 8;
 const MAX_TOKENS: u32 = 4096;
 /// Descriptions are truncated before they hit the prompt to bound token spend.
 const DESC_LIMIT: usize = 1200;
@@ -252,35 +258,79 @@ pub async fn run(
         .build()
         .context("building HTTP client")?;
 
-    let total_batches = candidates.chunks(BATCH_SIZE).count();
+    let batches: Vec<&[posting::Model]> = candidates.chunks(BATCH_SIZE).collect();
+    let total_batches = batches.len();
     let total = candidates.len();
     println!(
-        "Scoring {total} posting(s) in {total_batches} batch(es) via {MODEL} \
-         ({} pre-filtered already). Safe to Ctrl-C — progress is saved per batch.",
+        "Scoring {total} posting(s) in {total_batches} batch(es) via {MODEL}, up to \
+         {SCORE_CONCURRENCY} at a time ({} pre-filtered already). Safe to Ctrl-C — \
+         progress is saved per batch.",
         rejects.len()
     );
 
     let mut scored = 0u64;
     let mut failed = 0u64;
     let mut usage = Usage::default();
-    for (i, batch) in candidates.chunks(BATCH_SIZE).enumerate() {
-        match score_batch(&client, &api_key, &system, batch).await {
+    let mut completed = 0usize;
+
+    // Redraw the live progress line in place on stderr. Counts completed batches,
+    // which under concurrency finish out of submission order — that's fine, it's a
+    // "N of total done" indicator, not a position.
+    let draw = |completed: usize, scored: u64, failed: u64| {
+        eprint!(
+            "\r  batch {completed}/{total_batches} · {}/{total} postings · {scored} scored, {failed} failed",
+            scored + failed
+        );
+        let _ = io::stderr().flush();
+    };
+
+    // Apply one batch's outcome: sum usage and persist scores (serially), or count
+    // the whole batch failed and leave it untriaged for a later run to retry.
+    async fn absorb(
+        db: &DatabaseConnection,
+        now: &str,
+        batch: &[posting::Model],
+        res: Result<(Vec<Scored>, Usage)>,
+        scored: &mut u64,
+        failed: &mut u64,
+        usage: &mut Usage,
+    ) -> Result<()> {
+        match res {
             Ok((results, batch_usage)) => {
                 usage.add(&batch_usage);
-                scored += apply_scores(db, batch, &results, &now).await?;
+                *scored += apply_scores(db, batch, &results, now).await?;
             }
             Err(e) => {
-                failed += batch.len() as u64;
+                *failed += batch.len() as u64;
                 warn!(error = %e, batch = batch.len(), "batch scoring failed — leaving untriaged");
             }
         }
-        // Live progress line, redrawn in place on stderr.
-        let done = scored + failed;
-        eprint!(
-            "\r  batch {}/{total_batches} · {done}/{total} postings · {scored} scored, {failed} failed",
-            i + 1
-        );
-        let _ = io::stderr().flush();
+        Ok(())
+    }
+
+    // Send the first batch alone so it writes the ephemeral prompt cache; the
+    // concurrent wave that follows then reads that cache at ~0.1x instead of every
+    // request racing to write it and paying full input price.
+    if let Some((first, rest)) = batches.split_first() {
+        let res = score_batch(&client, &api_key, &system, first).await;
+        absorb(db, &now, first, res, &mut scored, &mut failed, &mut usage).await?;
+        completed += 1;
+        draw(completed, scored, failed);
+
+        let mut stream = stream::iter(rest.iter().copied())
+            .map(|batch| {
+                let client = &client;
+                let api_key = &api_key;
+                let system = &system;
+                async move { (batch, score_batch(client, api_key, system, batch).await) }
+            })
+            .buffer_unordered(SCORE_CONCURRENCY);
+
+        while let Some((batch, res)) = stream.next().await {
+            absorb(db, &now, batch, res, &mut scored, &mut failed, &mut usage).await?;
+            completed += 1;
+            draw(completed, scored, failed);
+        }
     }
     eprintln!();
 
